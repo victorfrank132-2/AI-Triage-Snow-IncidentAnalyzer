@@ -1,0 +1,29 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+      nodejs: 20
+    commands:
+      - python -m pip install --upgrade pip
+      - pip install -r infrastructure/requirements.txt
+      - npm install --global aws-cdk@2.1132.0
+  pre_build:
+    commands:
+      - export IMAGE_TAG="$(echo "${CODEBUILD_RESOLVED_SOURCE_VERSION:-manual}" | cut -c1-12)"
+      - if [ -z "$IMAGE_TAG" ] || [ "$IMAGE_TAG" = "manual" ]; then IMAGE_TAG="s3$(date +%Y%m%d%H%M%S)"; fi
+      - test -n "$IMAGE_TAG"
+      - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+  build:
+    commands:
+      - |
+        for service in rag-retriever context-agent attachment-agent splunk-agent reasoning-agent servicenow-writer rag-indexer; do
+          repository_var="ECR_$(echo "$service" | tr '[:lower:]-' '[:upper:]_')_URI"
+          repository_uri="$(printenv "$repository_var")"
+          docker build --pull --file "services/$service/Dockerfile" --tag "$repository_uri:$IMAGE_TAG" .
+          docker push "$repository_uri:$IMAGE_TAG"
+        done
+  post_build:
+    commands:
+      - cd infrastructure && cdk deploy SnowCompute --exclusively --require-approval never --parameters "SnowCompute:ContainerImageTag=$IMAGE_TAG"
