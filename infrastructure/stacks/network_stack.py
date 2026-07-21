@@ -87,6 +87,9 @@ class NetworkStack(Stack):
         self.task_security_group.add_egress_rule(
             ec2.Peer.any_ipv4(), ec2.Port.tcp(443), "HTTPS to approved SaaS and AWS endpoints"
         )
+        self.task_security_group.add_egress_rule(
+            ec2.Peer.any_ipv4(), ec2.Port.tcp(8089), "Splunk management API egress"
+        )
         self.endpoint_security_group = ec2.SecurityGroup(
             self,
             "VpcEndpointSecurityGroup",

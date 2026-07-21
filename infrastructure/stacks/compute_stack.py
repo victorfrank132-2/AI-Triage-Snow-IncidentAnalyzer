@@ -288,6 +288,17 @@ class ComputeStack(Stack):
                     ],
                 )
             )
+            # Some Bedrock Marketplace models require runtime subscription checks
+            # via AWS Marketplace APIs before invocation is allowed.
+            task_role.add_to_policy(
+                iam.PolicyStatement(
+                    actions=[
+                        "aws-marketplace:ViewSubscriptions",
+                        "aws-marketplace:Subscribe",
+                    ],
+                    resources=["*"],
+                )
+            )
         if service in {"rag-retriever", "rag-indexer", "rag-quality-job"}:
             task_role.add_to_policy(
                 iam.PolicyStatement(

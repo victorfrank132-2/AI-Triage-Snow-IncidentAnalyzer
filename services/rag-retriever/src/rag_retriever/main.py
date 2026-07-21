@@ -36,7 +36,7 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
         embedding, token_count = embed_text(query_text)
         candidates = [
             RagCandidate(
-                document_id=hit["_id"],
+                document_id=hit.get("_source", {}).get("document_id", hit["_id"]),
                 score=float(hit["_score"]),
                 incident_summary=hit["_source"]["incident_summary"],
                 recommendation=hit["_source"]["recommendation"],
