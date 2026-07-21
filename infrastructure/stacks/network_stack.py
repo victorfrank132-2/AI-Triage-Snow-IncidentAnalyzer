@@ -97,7 +97,12 @@ class NetworkStack(Stack):
             self.task_security_group, ec2.Port.tcp(443), "Fargate HTTPS to VPC endpoints"
         )
         aoss_vpc_endpoint_id = None
-        endpoint_subnets = ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS)
+        endpoint_subnet_type = (
+            ec2.SubnetType.PRIVATE_ISOLATED
+            if cost_optimized_dev
+            else ec2.SubnetType.PRIVATE_WITH_EGRESS
+        )
+        endpoint_subnets = ec2.SubnetSelection(subnet_type=endpoint_subnet_type)
         for service in (
             ec2.InterfaceVpcEndpointAwsService.ECR,
             ec2.InterfaceVpcEndpointAwsService.ECR_DOCKER,
