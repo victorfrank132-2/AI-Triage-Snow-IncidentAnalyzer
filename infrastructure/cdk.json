@@ -4,7 +4,7 @@
     "@aws-cdk/core:defaultCrossStackReferences": "strong",
     "project_name": "snow-incident-intelligence",
     "environment": "dev",
-    "mock_mode": true,
+    "mock_mode": false,
     "mtls_enabled": false,
     "cost_optimized_dev": true
   }
