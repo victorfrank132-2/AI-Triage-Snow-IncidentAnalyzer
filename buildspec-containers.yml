@@ -28,4 +28,4 @@ phases:
         done
   post_build:
     commands:
-      - cd infrastructure && cdk deploy SnowCompute --require-approval never --parameters "ContainerImageTag=$IMAGE_TAG"
+      - cd infrastructure && cdk deploy SnowCompute --exclusively --require-approval never --parameters "SnowCompute:ContainerImageTag=$IMAGE_TAG"
