@@ -11,7 +11,7 @@ phases:
       - npm install --global aws-cdk@2.1132.0
   pre_build:
     commands:
-      - export IMAGE_TAG="${CODEBUILD_RESOLVED_SOURCE_VERSION:0:12}"
+      - export IMAGE_TAG="$(echo "$CODEBUILD_RESOLVED_SOURCE_VERSION" | cut -c1-12)"
       - test -n "$IMAGE_TAG"
       - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
   build:
@@ -28,4 +28,4 @@ phases:
         done
   post_build:
     commands:
-      - cd infrastructure && cdk deploy SnowCompute --require-approval never --parameters "SnowCompute:ContainerImageTag=$IMAGE_TAG"
+      - cd infrastructure && cdk deploy SnowCompute --require-approval never --parameters "ContainerImageTag=$IMAGE_TAG"
