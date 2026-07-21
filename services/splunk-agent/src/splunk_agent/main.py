@@ -14,11 +14,39 @@ from snow_intelligence.splunk import validate_splunk_query
 from snow_intelligence.stages import load_stage
 
 
+_DEFAULT_SPLUNK_INDEXES = "servicenow,life_api_logs,life_ui_logs,pc_api_logs,pc_ui_logs"
+
+
+def _csv_set(value: str) -> set[str]:
+    return {item.strip() for item in value.split(",") if item.strip()}
+
+
+def _csv_list(value: str) -> list[str]:
+    values: list[str] = []
+    for item in value.split(","):
+        normalized = item.strip()
+        if normalized and normalized not in values:
+            values.append(normalized)
+    return values
+
+
+def _query_indexes() -> list[str]:
+    return _csv_list(os.getenv("SPLUNK_INDEXES", _DEFAULT_SPLUNK_INDEXES))
+
+
 def _policy() -> SplunkQueryPolicy:
+    configured_allowed_indexes = os.getenv("SPLUNK_ALLOWED_INDEXES", "").strip()
+    allowed_indexes = (
+        _csv_set(configured_allowed_indexes)
+        if configured_allowed_indexes
+        else set(_query_indexes())
+    )
     return SplunkQueryPolicy(
-        allowed_indexes=set(os.getenv("SPLUNK_ALLOWED_INDEXES", "main,servicenow").split(",")),
+        allowed_indexes=allowed_indexes,
         allowed_sourcetypes=set(
-            os.getenv("SPLUNK_ALLOWED_SOURCETYPES", "app_log,servicenow").split(",")
+            os.getenv(
+                "SPLUNK_ALLOWED_SOURCETYPES", "app_log,servicenow,life_api,life_ui,pc_api,pc_ui"
+            ).split(",")
         ),
         allowed_fields={"incident_number", "host", "service", "error_code", "severity"},
         max_time_range_hours=int(os.getenv("SPLUNK_MAX_TIME_RANGE_HOURS", "24")),
@@ -76,6 +104,34 @@ def _count_export_rows(response_text: str) -> int:
             else:
                 count += 1
     return count
+
+
+def _extract_context_terms(context_summary: str) -> list[str]:
+    text = str(context_summary or "")
+    terms: list[str] = []
+    patterns = [
+        r"\bREQ-\d+\b",
+        r"\bTERM-\d+\b",
+        r"\bQ-[A-Za-z0-9-]+\b",
+        r"\b(?:GET|POST|PUT|DELETE|PATCH)\s+(/api/[A-Za-z0-9/_-]+)",
+        r"\b(/api/[A-Za-z0-9/_-]+)",
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, text):
+            value = match.group(1) if match.lastindex else match.group(0)
+            normalized = value.strip()
+            if normalized and normalized not in terms:
+                terms.append(normalized)
+    return terms
+
+
+def _build_query(incident_number: str, context_summary: str) -> str:
+    indexes = _query_indexes()
+    index_clause = "(" + " OR ".join(f"index={index_name}" for index_name in indexes) + ")"
+    signal_terms = [f'incident_number="{incident_number}"']
+    signal_terms.extend(f'"{term}"' for term in _extract_context_terms(context_summary)[:6])
+    signal_clause = "(" + " OR ".join(signal_terms) + ")"
+    return f"{index_clause} {signal_clause} | head 50"
 
 
 def _web_proxy_login(session: requests.Session, base_url: str, username: str, password: str) -> str:
@@ -162,17 +218,22 @@ def _execute_query(request: SplunkQueryRequest) -> tuple[str, str]:
 def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
     context_stage = load_stage(context, "context")
     incident_number = payload["incident"]["incident_number"]
+    query = _build_query(incident_number, context_stage.get("incident_summary", ""))
     request = SplunkQueryRequest(
-        query=f'index=servicenow sourcetype=servicenow incident_number="{incident_number}" | head 50',
+        query=query,
         earliest_hours_ago=4,
         max_rows=50,
     )
     validate_splunk_query(request, _policy())
     search_id, summary = ("mock-search-job", "Mock Splunk evidence completed.") if context.mock_mode else _execute_query(request)
+    indexes_searched = ", ".join(_query_indexes())
     evidence = EvidenceReference(
         source="splunk",
         reference=search_id,
-        summary=f"{summary} Incident {incident_number}; context: {context_stage['incident_summary'][:160]}",
+        summary=(
+            f"{summary} Indexes searched: {indexes_searched}. "
+            f"Incident {incident_number}; context: {context_stage['incident_summary'][:160]}"
+        ),
         confidence=0.75,
     )
     return {"query": request.model_dump(), "evidence": [evidence.model_dump()]}

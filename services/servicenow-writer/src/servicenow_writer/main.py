@@ -83,6 +83,7 @@ def _write_to_servicenow(note: WorkNote) -> dict[str, Any]:
 
 
 def _attach_evidence_file(base_url: str, incident_sys_id: str, note: WorkNote) -> dict[str, Any]:
+    base_url = base_url.rstrip("/")
     file_name, attachment_text = _build_evidence_attachment(note)
     response = requests.post(
         f"{base_url}/api/now/attachment/file",

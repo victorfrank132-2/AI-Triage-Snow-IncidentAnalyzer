@@ -17,11 +17,35 @@ class ReasoningState(TypedDict, total=False):
     work_note_markdown: str
 
 
+def _normalize_summary(value: Any, max_length: int = 220) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= max_length:
+        return text
+    return f"{text[: max_length - 3]}..."
+
+
+def _compact_evidence_lines(evidence: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    has_attachment_evidence = False
+    for item in evidence:
+        source = str(item.get("source", "unknown")).strip().lower()
+        summary = _normalize_summary(item.get("summary", ""))
+        if source == "attachment":
+            has_attachment_evidence = True
+            continue
+        if summary:
+            lines.append(f"- [{source}] {summary}")
+
+    if has_attachment_evidence:
+        lines.append(
+            "- [attachment] Attachment-derived operational details are available in the evidence attachment file."
+        )
+
+    return "\n".join(lines) or "- No corroborating evidence was available."
+
+
 def _compose_note(state: ReasoningState) -> ReasoningState:
-    evidence_lines = (
-        "\n".join(f"- [{item['source']}] {item['summary']}" for item in state.get("evidence", []))
-        or "- No corroborating evidence was available."
-    )
+    evidence_lines = _compact_evidence_lines(state.get("evidence", []))
     recommendation = state["recommendation"]
     return {
         "work_note_markdown": (
