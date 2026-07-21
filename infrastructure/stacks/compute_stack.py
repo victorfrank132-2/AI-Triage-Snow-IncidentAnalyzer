@@ -282,14 +282,20 @@ class ComputeStack(Stack):
             task_role.add_to_policy(
                 iam.PolicyStatement(
                     actions=["bedrock:InvokeModel"],
-                    resources=[self.bedrock_model_arn.value_as_string],
+                    resources=[
+                        self.bedrock_model_arn.value_as_string,
+                        f"arn:aws:bedrock:{self.region}:{self.account}:inference-profile/{self.bedrock_model_id.value_as_string}",
+                    ],
                 )
             )
         if service in {"rag-retriever", "rag-indexer", "rag-quality-job"}:
             task_role.add_to_policy(
                 iam.PolicyStatement(
                     actions=["bedrock:InvokeModel"],
-                    resources=[self.bedrock_embedding_model_arn.value_as_string],
+                    resources=[
+                        self.bedrock_embedding_model_arn.value_as_string,
+                        f"arn:aws:bedrock:{self.region}:{self.account}:inference-profile/{self.bedrock_embedding_model_id.value_as_string}",
+                    ],
                 )
             )
         if service == "attachment-agent":
