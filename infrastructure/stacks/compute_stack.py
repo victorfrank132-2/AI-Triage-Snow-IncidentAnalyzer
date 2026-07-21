@@ -118,14 +118,14 @@ class ComputeStack(Stack):
             self,
             "BedrockModelId",
             type="String",
-            default="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            default="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             description="Approved Bedrock model or inference profile ID. Verify access before deployment.",
         )
         self.bedrock_model_arn = CfnParameter(
             self,
             "BedrockModelArn",
             type="String",
-            default="arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+            default="arn:aws:bedrock:*::foundation-model/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             description="IAM resource ARN approved for Bedrock InvokeModel. Use the exact profile/model resources for production.",
         )
         self.bedrock_embedding_model_id = CfnParameter(
