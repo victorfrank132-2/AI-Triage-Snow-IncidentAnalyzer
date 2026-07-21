@@ -1,0 +1,23 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+      nodejs: 20
+    commands:
+      - python -m pip install --upgrade pip
+      - pip install -e ".[dev]" -r infrastructure/requirements.txt
+      - npm install --global aws-cdk@2.1132.0
+  pre_build:
+    commands:
+      - export IMAGE_TAG="splunkwebfix-$(date +%Y%m%d%H%M%S)"
+      - test -n "$IMAGE_TAG"
+      - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+  build:
+    commands:
+      - docker build --pull --file services/splunk-agent/Dockerfile --tag "$ECR_SPLUNK_AGENT_URI:$IMAGE_TAG" .
+      - docker push "$ECR_SPLUNK_AGENT_URI:$IMAGE_TAG"
+  post_build:
+    commands:
+      - cd infrastructure && cdk deploy SnowCompute --exclusively --require-approval never --parameters "SnowCompute:ContainerImageTag=$IMAGE_TAG"

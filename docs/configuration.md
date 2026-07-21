@@ -22,11 +22,13 @@ Populate these two CDK-created secret containers after the initial infrastructur
 
 ```json
 {
-  "base_url": "https://splunk.example.com:8089",
+  "base_url": "https://prd-p-ify2a.splunkcloud.com/en-US/app/search/search",
   "username": "your-splunk-service-user",
   "password": "replace-with-password"
 }
 ```
+
+Set `SPLUNK_ACCESS_MODE=web_proxy` for Splunk Cloud tenants that expose Splunk Web while management port `8089` is restricted. The runtime normalizes `SPLUNK_BASE_URL`, so either host-only (`https://prd-p-ify2a.splunkcloud.com`) or full search URL is accepted.
 
 Use distinct least-privilege accounts for ServiceNow writeback, ServiceNow webhook ingress, and Splunk when your tenant allows it. The authorizer reads the ServiceNow secret by ARN and compares the incoming HTTP `Authorization: Basic ...` value in memory; do not store a manually encoded header. Rotate credentials through each provider's approved workflow. ECS tasks resolve secrets at task launch, so running ECS services need a forced deployment after rotation; one-off Step Functions tasks pick up the latest value when each task starts. The Lambda authorizer caches webhook credentials for up to five minutes.
 

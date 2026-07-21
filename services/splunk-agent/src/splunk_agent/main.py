@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
+import re
 import time
+from urllib.parse import urlparse
 from typing import Any
 
 import requests
@@ -23,12 +26,121 @@ def _policy() -> SplunkQueryPolicy:
     )
 
 
+def _normalize_base_url(raw_url: str) -> str:
+    candidate = (raw_url or "").strip()
+    if not candidate:
+        raise ValueError("SPLUNK_BASE_URL must not be empty")
+    if "://" not in candidate:
+        candidate = f"https://{candidate}"
+    parsed = urlparse(candidate)
+    if not parsed.scheme or not parsed.netloc:
+        raise ValueError(f"Invalid SPLUNK_BASE_URL: {raw_url}")
+    return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+
+
+def _ensure_search_prefix(query: str) -> str:
+    stripped = query.strip()
+    return stripped if stripped.lower().startswith("search ") else f"search {stripped}"
+
+
+def _count_export_rows(response_text: str) -> int:
+    text = response_text.strip()
+    if not text:
+        return 0
+
+    try:
+        payload = json.loads(text)
+        if isinstance(payload, dict):
+            rows = payload.get("rows")
+            if isinstance(rows, list):
+                return len(rows)
+            if "result" in payload:
+                return 1
+        if isinstance(payload, list):
+            return len(payload)
+    except json.JSONDecodeError:
+        pass
+
+    count = 0
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict) and ("result" in item or "_raw" in item or "rows" in item):
+            if isinstance(item.get("rows"), list):
+                count += len(item["rows"])
+            else:
+                count += 1
+    return count
+
+
+def _web_proxy_login(session: requests.Session, base_url: str, username: str, password: str) -> str:
+    login_url = f"{base_url}/en-US/account/login"
+    login_page = session.get(login_url, timeout=(5, 20))
+    login_page.raise_for_status()
+    cval_match = re.search(r'"cval":(\d+)', login_page.text)
+    if not cval_match:
+        raise RuntimeError("Unable to parse Splunk login token")
+    cval = cval_match.group(1)
+
+    login_response = session.post(
+        login_url,
+        data={"username": username, "password": password, "cval": cval},
+        timeout=(5, 20),
+    )
+    login_response.raise_for_status()
+
+    csrf_token = cval
+    for cookie_name, cookie_value in session.cookies.items():
+        if cookie_name.startswith("splunkweb_csrf_token_"):
+            csrf_token = cookie_value
+            break
+    return csrf_token
+
+
+def _execute_query_web_proxy(base_url: str, request: SplunkQueryRequest) -> tuple[str, str]:
+    username = os.environ["SPLUNK_USERNAME"]
+    password = os.environ["SPLUNK_PASSWORD"]
+    session = requests.Session()
+    csrf_token = _web_proxy_login(session, base_url, username, password)
+    search = _ensure_search_prefix(request.query)
+
+    response = session.post(
+        f"{base_url}/en-US/splunkd/__raw/services/search/jobs/export",
+        headers={
+            "Accept": "application/json",
+            "Referer": f"{base_url}/en-US/app/search/search",
+            "X-Requested-With": "XMLHttpRequest",
+            "X-Splunk-Form-Key": csrf_token,
+        },
+        data={
+            "search": search,
+            "earliest_time": f"-{request.earliest_hours_ago}h",
+            "output_mode": "json_rows",
+            "count": request.max_rows,
+        },
+        timeout=(5, 40),
+    )
+    response.raise_for_status()
+    row_count = _count_export_rows(response.text)
+    return "web-proxy-export", f"Splunk returned {row_count} guardrailed evidence rows."
+
+
 def _execute_query(request: SplunkQueryRequest) -> tuple[str, str]:
-    base_url = os.environ["SPLUNK_BASE_URL"].rstrip("/")
+    base_url = _normalize_base_url(os.environ["SPLUNK_BASE_URL"])
     auth = (os.environ["SPLUNK_USERNAME"], os.environ["SPLUNK_PASSWORD"])
+    access_mode = os.getenv("SPLUNK_ACCESS_MODE", "web_proxy").strip().lower()
+    if access_mode == "web_proxy":
+        return _execute_query_web_proxy(base_url, request)
+
+    query = _ensure_search_prefix(request.query)
     submitted = requests.post(
         f"{base_url}/services/search/jobs",
-        data={"search": request.query, "earliest_time": f"-{request.earliest_hours_ago}h", "output_mode": "json"},
+        data={"search": query, "earliest_time": f"-{request.earliest_hours_ago}h", "output_mode": "json"},
         auth=auth,
         timeout=(5, 20),
     )
