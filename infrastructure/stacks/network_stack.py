@@ -97,11 +97,23 @@ class NetworkStack(Stack):
             self.task_security_group, ec2.Port.tcp(443), "Fargate HTTPS to VPC endpoints"
         )
         aoss_vpc_endpoint_id = None
+        endpoint_subnets = ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS)
+        for service in (
+            ec2.InterfaceVpcEndpointAwsService.ECR,
+            ec2.InterfaceVpcEndpointAwsService.ECR_DOCKER,
+        ):
+            self.vpc.add_interface_endpoint(
+                f"{service.short_name.title().replace('.', '')}Endpoint",
+                service=service,
+                subnets=endpoint_subnets,
+                security_groups=[self.endpoint_security_group],
+                private_dns_enabled=True,
+            )
+        self.vpc.add_gateway_endpoint(
+            "S3GatewayEndpoint", service=ec2.GatewayVpcEndpointAwsService.S3
+        )
         if not cost_optimized_dev:
-            endpoint_subnets = ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS)
             for service in (
-                ec2.InterfaceVpcEndpointAwsService.ECR,
-                ec2.InterfaceVpcEndpointAwsService.ECR_DOCKER,
                 ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS,
                 ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
                 ec2.InterfaceVpcEndpointAwsService.STS,
@@ -113,9 +125,6 @@ class NetworkStack(Stack):
                     security_groups=[self.endpoint_security_group],
                     private_dns_enabled=True,
                 )
-            self.vpc.add_gateway_endpoint(
-                "S3GatewayEndpoint", service=ec2.GatewayVpcEndpointAwsService.S3
-            )
             aoss_vpc_endpoint = __import__(
                 "aws_cdk.aws_opensearchserverless", fromlist=["CfnVpcEndpoint"]
             ).CfnVpcEndpoint(
