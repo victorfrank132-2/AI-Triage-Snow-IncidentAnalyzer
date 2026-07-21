@@ -36,5 +36,5 @@ docs/                    Architecture, contracts, state machine reference, runbo
 scripts/                 Developer helpers
 ```
 
-Read [docs/architecture.md](docs/architecture.md), [docs/api-contract.md](docs/api-contract.md), and [docs/runbooks/deployment.md](docs/runbooks/deployment.md) before deployment.
+Read [docs/architecture.md](docs/architecture.md), [docs/api-contract.md](docs/api-contract.md), [docs/runbooks/deployment.md](docs/runbooks/deployment.md), and [docs/runbooks/servicenow-webhook-session.md](docs/runbooks/servicenow-webhook-session.md) before deployment.
 

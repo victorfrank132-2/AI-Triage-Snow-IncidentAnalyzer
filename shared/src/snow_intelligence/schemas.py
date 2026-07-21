@@ -40,7 +40,7 @@ class ServiceNowIncidentPayload(BaseModel):
     assignment_group: str | None = Field(default=None, max_length=255)
     caller: str | None = Field(default=None, max_length=255)
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    attachments: list[AttachmentRef] = Field(default_factory=list, max_length=25)
+    attachments: list[AttachmentRef] = Field(default_factory=list)
 
     @field_validator("event_id", "incident_sys_id", "incident_number")
     @classmethod

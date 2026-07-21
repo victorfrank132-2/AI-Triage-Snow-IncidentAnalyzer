@@ -40,8 +40,10 @@ def _extract_attachment(context: TaskContext, attachment: Any) -> str:
 
 def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
     incident = ServiceNowIncidentPayload.model_validate(payload["incident"])
+    max_items = int(os.getenv("ATTACHMENT_MAX_ITEMS", "25"))
+    selected_attachments = incident.attachments[:max_items]
     evidence: list[dict[str, Any]] = []
-    for attachment in incident.attachments:
+    for attachment in selected_attachments:
         summary = f"Mock attachment enrichment: {attachment.file_name}" if context.mock_mode else _extract_attachment(context, attachment)
         evidence.append(
             EvidenceReference(
@@ -51,7 +53,24 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
                 confidence=0.7,
             ).model_dump()
         )
-    return {"attachment_count": len(incident.attachments), "evidence": evidence}
+    skipped = max(len(incident.attachments) - len(selected_attachments), 0)
+    if skipped:
+        evidence.append(
+            EvidenceReference(
+                source="operator",
+                reference="attachment-limit",
+                summary=(
+                    f"Skipped {skipped} attachments after processing limit of {max_items}. "
+                    "Increase ATTACHMENT_MAX_ITEMS to process more attachments in this stage."
+                ),
+                confidence=1.0,
+            ).model_dump()
+        )
+    return {
+        "attachment_count": len(incident.attachments),
+        "attachment_count_processed": len(selected_attachments),
+        "evidence": evidence,
+    }
 
 
 if __name__ == "__main__":

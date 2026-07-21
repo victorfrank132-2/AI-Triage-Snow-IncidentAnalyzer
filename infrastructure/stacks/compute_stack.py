@@ -267,6 +267,9 @@ class ComputeStack(Stack):
             ),
             stop_timeout=Duration.seconds(60),
         )
+        if service in {"attachment-agent", "servicenow-writer", "splunk-agent"}:
+            execution_role = task_definition.obtain_execution_role()
+            self.security.secret_key.grant_decrypt(execution_role)
         self.data.artifact_bucket.grant_read_write(task_role)
         if service in {
             "context-agent",
