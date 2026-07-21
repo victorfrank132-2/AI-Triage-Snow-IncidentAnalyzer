@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM public.ecr.aws/docker/library/python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app/shared/src:/app/service/src
 WORKDIR /app
 RUN useradd --create-home --uid 10001 appuser
@@ -11,4 +11,3 @@ RUN chown -R appuser:appuser /app
 USER appuser
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 CMD python -c "import rag_indexer" || exit 1
 CMD ["python", "-m", "rag_indexer.main"]
-
