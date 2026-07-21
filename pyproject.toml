@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=75,<82"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "servicenow-incident-intelligence"
+version = "0.1.0"
+description = "Enterprise ServiceNow incident intelligence with RAG on AWS"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "boto3>=1.36,<2.0",
+  "botocore>=1.36,<2.0",
+  "pydantic>=2.10,<3.0",
+  "requests>=2.32,<3.0",
+  "opensearch-py>=2.7,<3.0",
+  "opentelemetry-api>=1.29,<2.0",
+  "opentelemetry-sdk>=1.29,<2.0",
+  "langchain-core>=0.3,<1.0",
+  "langgraph>=0.2,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9.0",
+  "pytest-cov>=6.0,<7.0",
+  "ruff>=0.9,<1.0",
+  "mypy>=1.14,<2.0",
+  "types-requests>=2.32,<3.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["shared/src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["shared/src", "services/reasoning-agent/src"]
+addopts = "-q --strict-markers"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["cdk.out"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["shared/src", "services"]
+exclude = ["infrastructure"]

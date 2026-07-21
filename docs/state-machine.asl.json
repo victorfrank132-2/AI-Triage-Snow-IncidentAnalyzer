@@ -1,0 +1,39 @@
+{
+  "Comment": "Portable reference definition. CDK materializes concrete ARNs, ECS task definitions, networking, retries, and callback credentials.",
+  "StartAt": "RetrieveSimilarCases",
+  "States": {
+    "RetrieveSimilarCases": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::ecs:runTask.waitForTaskToken",
+      "TimeoutSeconds": 900,
+      "Retry": [{"ErrorEquals": ["States.Timeout", "States.TaskFailed", "AmazonECS.Unknown"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL"}],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "CompensateAndEscalate"}],
+      "ResultPath": "$.routing",
+      "Next": "RouteByRagConfidence"
+    },
+    "RouteByRagConfidence": {
+      "Type": "Choice",
+      "Choices": [
+        {"Variable": "$.routing.decision.route", "StringEquals": "fast", "Next": "ProduceRecommendation"},
+        {"Variable": "$.routing.decision.route", "StringEquals": "refine", "Next": "UnderstandContext"}
+      ],
+      "Default": "UnderstandContextWithAttachments"
+    },
+    "UnderstandContext": {"Type": "Task", "Resource": "arn:aws:states:::ecs:runTask.sync", "TimeoutSeconds": 900, "Next": "CollectSplunkEvidence"},
+    "UnderstandContextWithAttachments": {"Type": "Task", "Resource": "arn:aws:states:::ecs:runTask.sync", "TimeoutSeconds": 900, "Next": "EnrichAttachments"},
+    "EnrichAttachments": {"Type": "Task", "Resource": "arn:aws:states:::ecs:runTask.sync", "TimeoutSeconds": 900, "Next": "CollectSplunkEvidence"},
+    "CollectSplunkEvidence": {"Type": "Task", "Resource": "arn:aws:states:::ecs:runTask.sync", "TimeoutSeconds": 900, "Next": "ProduceRecommendation"},
+    "ProduceRecommendation": {"Type": "Task", "Resource": "arn:aws:states:::ecs:runTask.sync", "TimeoutSeconds": 900, "Next": "PostServiceNowWorkNote"},
+    "PostServiceNowWorkNote": {"Type": "Task", "Resource": "arn:aws:states:::ecs:runTask.sync", "TimeoutSeconds": 900, "Next": "CaptureRagOutcome"},
+    "CaptureRagOutcome": {"Type": "Task", "Resource": "arn:aws:states:::ecs:runTask.sync", "TimeoutSeconds": 900, "Next": "WorkflowSucceeded"},
+    "CompensateAndEscalate": {
+      "Type": "Pass",
+      "Result": {"status": "needs_human_review", "action": "preserve S3 artifacts, alert operations, do not perform automatic remediation"},
+      "ResultPath": "$.fallback",
+      "Next": "WorkflowFailed"
+    },
+    "WorkflowSucceeded": {"Type": "Succeed"},
+    "WorkflowFailed": {"Type": "Fail", "Error": "IncidentIntelligenceFailed", "Cause": "See the correlation ID in CloudWatch, X-Ray, and S3 artifacts."}
+  }
+}
+

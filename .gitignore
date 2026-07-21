@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+cdk.out/
+cdk-outputs.json
+node_modules/
+.env
+.env.*
+!.env.example
+coverage.xml
+htmlcov/
+*.egg-info/

@@ -1,0 +1,11 @@
+{
+  "app": "python app.py",
+  "context": {
+    "@aws-cdk/core:defaultCrossStackReferences": "strong",
+    "project_name": "snow-incident-intelligence",
+    "environment": "dev",
+    "mock_mode": true,
+    "mtls_enabled": false,
+    "cost_optimized_dev": true
+  }
+}

@@ -1,0 +1,13 @@
+.git
+.agents
+.codex
+.github
+.venv
+cdk.out
+docs
+tests
+infrastructure
+*.md
+__pycache__
+*.pyc
+

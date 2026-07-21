@@ -1,0 +1,2 @@
+# The Lambda handlers rely only on the Python standard library and the boto3
+# runtime included with the managed Python 3.12 Lambda runtime.
