@@ -112,6 +112,13 @@ def _count_export_rows(response_text: str) -> int:
     return count
 
 
+def _summary_row_count(summary: str) -> int | None:
+    match = re.search(r"Splunk returned\s+(\d+)\s+guardrailed evidence rows", str(summary or ""))
+    if not match:
+        return None
+    return int(match.group(1))
+
+
 def _extract_context_terms(context_summary: str) -> list[str]:
     text = str(context_summary or "")
     terms: list[str] = []
@@ -179,6 +186,27 @@ def _build_query(identifier_terms: list[str], short_description: str = "", descr
 
     identifiers_clause = " OR ".join(f'"{term}"' for term in filtered_identifiers[:20])
     return f"{index_clause} ({identifiers_clause}) | head 50"
+
+
+def _build_attachment_case_queries(
+    attachment_evidence: list[dict[str, Any]], short_description: str, description: str
+) -> list[dict[str, Any]]:
+    cases: list[dict[str, Any]] = []
+    for item in attachment_evidence:
+        if str(item.get("source", "")).lower() != "attachment":
+            continue
+        attachment_ref = str(item.get("reference", "")).strip()
+        identifiers = _extract_context_terms(str(item.get("summary", "")))
+        if not attachment_ref or not identifiers:
+            continue
+        cases.append(
+            {
+                "attachment_reference": attachment_ref,
+                "identifiers": identifiers[:12],
+                "query": _build_query(identifiers, short_description=short_description, description=description),
+            }
+        )
+    return cases
 
 
 def _web_proxy_login(session: requests.Session, base_url: str, username: str, password: str) -> str:
@@ -295,17 +323,49 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
     )
     validate_splunk_query(request, _policy())
     search_id, summary = ("mock-search-job", "Mock Splunk evidence completed.") if context.mock_mode else _execute_query(request)
+
+    attachment_cases = _build_attachment_case_queries(
+        attachment_stage.get("evidence", []),
+        short_description=str(payload["incident"].get("short_description", "")),
+        description=str(payload["incident"].get("description", "")),
+    )
+    max_case_queries = int(os.getenv("SPLUNK_ATTACHMENT_CASE_MAX", "5"))
+    case_results: list[dict[str, Any]] = []
+    for case in attachment_cases[:max_case_queries]:
+        case_request = SplunkQueryRequest(query=case["query"], earliest_hours_ago=0, max_rows=30)
+        validate_splunk_query(case_request, _policy())
+        case_search_id, case_summary = (
+            (f"mock-case-{case['attachment_reference']}", "Mock Splunk evidence completed.")
+            if context.mock_mode
+            else _execute_query(case_request)
+        )
+        case_results.append(
+            {
+                "attachment_reference": case["attachment_reference"],
+                "identifiers": case["identifiers"],
+                "query": case["query"],
+                "search_reference": case_search_id,
+                "summary": case_summary,
+                "row_count": _summary_row_count(case_summary),
+            }
+        )
+
     indexes_searched = ", ".join(_query_indexes())
     evidence = EvidenceReference(
         source="splunk",
         reference=search_id,
         summary=(
             f"{summary} Indexes searched: {indexes_searched}. "
-            f"Incident {incident_number}; context: {context_stage['incident_summary'][:160]}"
+            f"Incident {incident_number}; context: {context_stage['incident_summary'][:160]}. "
+            f"Attachment case queries executed: {len(case_results)}"
         ),
         confidence=0.75,
     )
-    return {"query": request.model_dump(), "evidence": [evidence.model_dump()]}
+    return {
+        "query": request.model_dump(),
+        "evidence": [evidence.model_dump()],
+        "attachment_case_results": case_results,
+    }
 
 
 if __name__ == "__main__":

@@ -85,6 +85,7 @@ def _build_grounded_analysis(
     evidence: list[dict[str, Any]],
     splunk_query: str,
     route: RouteDecision,
+    attachment_case_results: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     signals = _extract_observed_signals(evidence)
     splunk_rows = _extract_splunk_row_signal(evidence)
@@ -121,10 +122,51 @@ def _build_grounded_analysis(
     )
     triage_points.append(f"RAG route selected: {route.route.value} (confidence {route.confidence:.2f}).")
 
-    possible_rca = (
-        "Unconfirmed RCA: repeated application failures are observed on the listed API endpoints. "
-        "Validate upstream dependency health, gateway connectivity, and timeout/error spikes for the same request IDs."
+    case_results = attachment_case_results or []
+    case_lines: list[str] = []
+    for case in case_results:
+        attachment_ref = str(case.get("attachment_reference", "unknown"))
+        identifiers = ", ".join(str(value) for value in case.get("identifiers", [])[:6])
+        row_count = case.get("row_count")
+        row_text = "unknown" if row_count is None else str(row_count)
+        case_lines.append(
+            f"Attachment {attachment_ref}: identifiers [{identifiers}] -> Splunk rows {row_text}."
+        )
+
+    quote_related = bool(signals["quote_ids"]) or any("/quotes" in endpoint for endpoint in endpoints)
+    policy_related = bool(signals["policy_ids"]) or any("/underwriting" in endpoint for endpoint in endpoints)
+    service_related = bool(endpoints)
+
+    rca_sections: list[str] = []
+    if case_lines:
+        rca_sections.append("Case-by-case log analysis:")
+        rca_sections.extend(f"- {line}" for line in case_lines)
+
+    if service_related:
+        rca_sections.append(
+            "Service RCA: API service endpoints show repeated failure patterns and should be checked for upstream dependency and gateway timeout behavior."
+        )
+    else:
+        rca_sections.append("Service RCA: No service endpoint pattern was confidently observed in available evidence.")
+
+    if quote_related:
+        rca_sections.append(
+            "Quotes RCA: Quote-related endpoint failures are present; validate quote/premium calculation path and downstream quote services."
+        )
+    else:
+        rca_sections.append("Quotes RCA: No quote-specific failure signal was confidently observed.")
+
+    if policy_related:
+        rca_sections.append(
+            "Policies RCA: Policy/underwriting signals are present; validate underwriting decision dependencies and policy service timeouts."
+        )
+    else:
+        rca_sections.append("Policies RCA: No policy-specific failure signal was confidently observed.")
+
+    rca_sections.append(
+        "Conclusion: treat this RCA as triage guidance based on observed evidence and confirm with service owners before remediation."
     )
+    possible_rca = "\n".join(rca_sections)
     rationale_summary = (
         "Work note is evidence-grounded using extracted identifiers, endpoint patterns, and Splunk row signal. "
         "No hidden reasoning traces are included."
@@ -150,9 +192,16 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
         *splunk_stage["evidence"],
     ]
     splunk_query_text = splunk_stage.get("query", {}).get("query", "")
+    attachment_case_results = splunk_stage.get("attachment_case_results", [])
     structured_analysis: dict[str, Any] = {}
     llm_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
-    grounded = _build_grounded_analysis(incident, evidence, splunk_query_text, route)
+    grounded = _build_grounded_analysis(
+        incident,
+        evidence,
+        splunk_query_text,
+        route,
+        attachment_case_results=attachment_case_results,
+    )
 
     if context.mock_mode:
         recommendation = grounded["recommendation"]
@@ -212,7 +261,7 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
         recommendation = grounded["recommendation"]
         rationale = grounded["rationale_summary"]
         triage_points = _unique(grounded["triage_points"] + llm_triage_points)
-        possible_rca = str(structured_analysis.get("possible_rca") or grounded["possible_rca"])
+        possible_rca = grounded["possible_rca"]
 
     graph_result = build_graph().invoke(
         {

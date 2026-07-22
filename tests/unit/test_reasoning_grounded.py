@@ -33,9 +33,20 @@ def test_grounded_analysis_triage_points_are_full_lines() -> None:
         evidence=evidence,
         splunk_query='index=life_api_logs ("REQ-763579") | head 50',
         route=route,
+        attachment_case_results=[
+            {
+                "attachment_reference": "att-1",
+                "identifiers": ["REQ-763579", "TERM-627395", "GET /api/v1/life/underwriting"],
+                "row_count": 5,
+            }
+        ],
     )
 
     triage_points = grounded["triage_points"]
     assert any(point.startswith("Request IDs observed:") for point in triage_points)
     assert all(len(point.strip()) > 2 for point in triage_points)
     assert "R" not in triage_points
+    assert "Case-by-case log analysis:" in grounded["possible_rca"]
+    assert "Service RCA:" in grounded["possible_rca"]
+    assert "Quotes RCA:" in grounded["possible_rca"]
+    assert "Policies RCA:" in grounded["possible_rca"]

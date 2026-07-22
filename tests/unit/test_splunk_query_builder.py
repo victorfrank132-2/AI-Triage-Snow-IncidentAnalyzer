@@ -25,3 +25,26 @@ def test_build_query_uses_expected_index_pattern_and_identifiers(monkeypatch) ->
     assert '"GET /api/v1/life/underwriting"' in query
     assert '"/api/v1/life/underwriting"' in query
     assert '"/api/v1/quotes/premium"' in query
+
+
+def test_build_attachment_case_queries_uses_each_attachment_summary(monkeypatch) -> None:
+    monkeypatch.delenv("SPLUNK_INDEXES", raising=False)
+    evidence = [
+        {
+            "source": "attachment",
+            "reference": "att-1",
+            "summary": "Error Code: ERR_502 Request ID: REQ-763579 Endpoint: GET /api/v1/life/underwriting",
+        },
+        {
+            "source": "attachment",
+            "reference": "att-2",
+            "summary": "Request ID: REQ-889452 Endpoint: GET /api/v1/quotes/premium",
+        },
+    ]
+
+    cases = splunk_main._build_attachment_case_queries(evidence, "", "")
+    assert len(cases) == 2
+    assert cases[0]["attachment_reference"] == "att-1"
+    assert "REQ-763579" in cases[0]["query"]
+    assert cases[1]["attachment_reference"] == "att-2"
+    assert "REQ-889452" in cases[1]["query"]

@@ -103,8 +103,7 @@ def _compose_note(state: ReasoningState) -> ReasoningState:
             f"{possible_rca or 'RCA is not yet confirmed; continue operator validation.'}\n\n"
             "Evidence metrics (Images/Splunk Query):\n"
             f"{_evidence_metrics(evidence, splunk_query=str(state.get('splunk_query', '')))}\n\n"
-            "Short AI response disclaimer:\n"
-            "AI-generated operational summary. Validate against logs, telemetry, and runbooks before closure."
+            "**AI analysis can be wrong and should only be considered for triage assistance.**"
         )
     }
 
