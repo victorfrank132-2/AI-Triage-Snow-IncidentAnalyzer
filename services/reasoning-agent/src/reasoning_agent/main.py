@@ -82,8 +82,8 @@ def _extract_attachment_log_facts(summary: str) -> dict[str, list[str]]:
     """Extract raw observable facts from a single attachment summary string."""
     text = str(summary or "")
     facts: dict[str, list[str]] = {
-        "error_codes": _unique(re.findall(r"(?:Error Code|Status Code|status)\s*[:\-]\s*([^\n\r*]+)", text, re.IGNORECASE)),
-        "error_messages": _unique(re.findall(r"(?:Error Message|Message)\s*[:\-]\s*([^\n\r*]+)", text, re.IGNORECASE)),
+        "error_codes": _unique(re.findall(r"(?:\*\*\s*)?(?:Error Code|Status Code|status)(?:\s*\*\*)?\s*[:\-]\s*([^\n\r*]+)", text, re.IGNORECASE)),
+        "error_messages": _unique(re.findall(r"(?:\*\*\s*)?(?:Error Message|Message)(?:\s*\*\*)?\s*[:\-]\s*([^\n\r*]+)", text, re.IGNORECASE)),
         "request_ids": _unique(re.findall(r"\bREQ-[A-Za-z0-9-]+\b", text)),
         "policy_ids": _unique(re.findall(r"\bTERM-[A-Za-z0-9-]+\b", text)),
         "quote_ids": _unique(re.findall(r"\bQ-[A-Za-z0-9-]+\b", text)),
@@ -190,8 +190,9 @@ def _build_grounded_analysis(
             continue
 
         any_case = True
-        rca_sections.append(f"")
-        rca_sections.append(f"{attachment_name} (Splunk rows matched: {row_text}):")
+        rca_sections.append("")
+        rca_sections.append(f"Attachment: {attachment_name}")
+        rca_sections.append(f"  - Splunk rows matched: {row_text}")
         if facts["request_ids"]:
             rca_sections.append(f"  - Request ID: {', '.join(facts['request_ids'][:4])}")
         if facts["policy_ids"]:
@@ -351,14 +352,9 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
             llm_triage_iterable = llm_triage_raw
         else:
             llm_triage_iterable = []
-        llm_triage_points = [
-            str(item)
-            for item in llm_triage_iterable
-            if str(item or "").strip()
-        ]
         recommendation = grounded["recommendation"]
         rationale = grounded["rationale_summary"]
-        triage_points = _unique(grounded["triage_points"] + llm_triage_points)
+        triage_points = grounded["triage_points"]
         possible_rca = grounded["possible_rca"]
 
     graph_result = build_graph().invoke(

@@ -55,7 +55,8 @@ def test_grounded_analysis_triage_points_are_full_lines() -> None:
 
     rca = grounded["possible_rca"]
     assert "Case-by-case log analysis:" in rca
-    assert "underwriting-failure.png" in rca
+    assert "Attachment: underwriting-failure.png" in rca
+    assert "Splunk rows matched: 5" in rca
     assert "Request ID: REQ-763579" in rca
     assert "Error Message: Underwriting decision pending" in rca
     assert "Recommended remediation:" in rca
