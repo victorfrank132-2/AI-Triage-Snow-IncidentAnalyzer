@@ -105,15 +105,21 @@ def _build_grounded_analysis(
             "Attachment and context evidence did not expose concrete API/error identifiers; further log capture is required."
         )
 
-    triage_points = [
-        *(f"Request IDs observed: {', '.join(signals['request_ids'][:6])}." if signals["request_ids"] else []),
-        *(f"Policy IDs observed: {', '.join(signals['policy_ids'][:6])}." if signals["policy_ids"] else []),
-        *(f"Quote IDs observed: {', '.join(signals['quote_ids'][:6])}." if signals["quote_ids"] else []),
-        *(f"Error codes observed: {', '.join(signals['error_codes'][:6])}." if signals["error_codes"] else []),
-        *(f"Endpoints observed: {', '.join(endpoints[:6])}." if endpoints else []),
-        f"Splunk query executed against app/api indexes: {splunk_query or 'not available'}.",
-        f"RAG route selected: {route.route.value} (confidence {route.confidence:.2f}).",
-    ]
+    triage_points: list[str] = []
+    if signals["request_ids"]:
+        triage_points.append(f"Request IDs observed: {', '.join(signals['request_ids'][:6])}.")
+    if signals["policy_ids"]:
+        triage_points.append(f"Policy IDs observed: {', '.join(signals['policy_ids'][:6])}.")
+    if signals["quote_ids"]:
+        triage_points.append(f"Quote IDs observed: {', '.join(signals['quote_ids'][:6])}.")
+    if signals["error_codes"]:
+        triage_points.append(f"Error codes observed: {', '.join(signals['error_codes'][:6])}.")
+    if endpoints:
+        triage_points.append(f"Endpoints observed: {', '.join(endpoints[:6])}.")
+    triage_points.append(
+        f"Splunk query executed against app/api indexes: {splunk_query or 'not available'}."
+    )
+    triage_points.append(f"RAG route selected: {route.route.value} (confidence {route.confidence:.2f}).")
 
     possible_rca = (
         "Unconfirmed RCA: repeated application failures are observed on the listed API endpoints. "
