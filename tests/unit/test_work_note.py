@@ -22,7 +22,7 @@ def test_work_note_uses_evidence_and_not_hidden_reasoning() -> None:
     assert "Summary:" in note
     assert "Triage Points:" in note
     assert "Possible RCA:" in note
-    assert "Evidence metrics (Images/Splunk Query):" in note
+    assert "Evidence metrics (Images/Splunk Query):" not in note
     assert "**AI analysis can be wrong and should only be considered for triage assistance.**" in note
     assert "Short AI response disclaimer:" not in note
     assert "Five matching timeout events." in note

@@ -20,7 +20,7 @@ def test_grounded_analysis_triage_points_are_full_lines() -> None:
     evidence = [
         {
             "source": "attachment",
-            "summary": "Error Code: 502 Request ID: REQ-763579 Policy ID: TERM-627395 Endpoint: GET /api/v1/life/underwriting Response Time: 8766 ms",
+            "summary": "Error Code: 502 Error Message: Underwriting decision pending Request ID: REQ-763579 Policy ID: TERM-627395 Endpoint: GET /api/v1/life/underwriting Response Time: 8766 ms",
         },
         {
             "source": "splunk",
@@ -29,13 +29,17 @@ def test_grounded_analysis_triage_points_are_full_lines() -> None:
     ]
 
     grounded = _build_grounded_analysis(
-        incident={"incident_number": "INC0010110"},
+        incident={
+            "incident_number": "INC0010110",
+            "attachments": [{"sys_id": "att-1", "file_name": "underwriting-failure.png"}],
+        },
         evidence=evidence,
         splunk_query='index=life_api_logs ("REQ-763579") | head 50',
         route=route,
         attachment_case_results=[
             {
                 "attachment_reference": "att-1",
+                "attachment_name": "underwriting-failure.png",
                 "identifiers": ["REQ-763579", "TERM-627395", "GET /api/v1/life/underwriting"],
                 "row_count": 5,
             }
@@ -47,6 +51,9 @@ def test_grounded_analysis_triage_points_are_full_lines() -> None:
     assert all(len(point.strip()) > 2 for point in triage_points)
     assert "R" not in triage_points
     assert "Case-by-case log analysis:" in grounded["possible_rca"]
+    assert "underwriting-failure.png" in grounded["possible_rca"]
+    assert "Observed error messages:" in grounded["possible_rca"]
+    assert "Recommended remediation:" in grounded["possible_rca"]
     assert "Service RCA:" in grounded["possible_rca"]
     assert "Quotes RCA:" in grounded["possible_rca"]
     assert "Policies RCA:" in grounded["possible_rca"]

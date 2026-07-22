@@ -196,12 +196,14 @@ def _build_attachment_case_queries(
         if str(item.get("source", "")).lower() != "attachment":
             continue
         attachment_ref = str(item.get("reference", "")).strip()
+        attachment_name = str(item.get("attachment_name", "")).strip()
         identifiers = _extract_context_terms(str(item.get("summary", "")))
         if not attachment_ref or not identifiers:
             continue
         cases.append(
             {
                 "attachment_reference": attachment_ref,
+                "attachment_name": attachment_name,
                 "identifiers": identifiers[:12],
                 "query": _build_query(identifiers, short_description=short_description, description=description),
             }
@@ -299,6 +301,18 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
     attachment_stage = load_stage(context, "attachments")
     incident_number = payload["incident"]["incident_number"]
 
+    attachment_name_by_ref = {
+        str(item.get("sys_id", "")): str(item.get("file_name", ""))
+        for item in payload.get("incident", {}).get("attachments", [])
+        if str(item.get("sys_id", "")).strip()
+    }
+    for evidence_item in attachment_stage.get("evidence", []):
+        if str(evidence_item.get("source", "")).lower() != "attachment":
+            continue
+        ref = str(evidence_item.get("reference", ""))
+        if ref in attachment_name_by_ref:
+            evidence_item["attachment_name"] = attachment_name_by_ref[ref]
+
     attachment_text = "\n".join(
         str(item.get("summary", "")) for item in attachment_stage.get("evidence", [])
     )
@@ -342,6 +356,7 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
         case_results.append(
             {
                 "attachment_reference": case["attachment_reference"],
+                "attachment_name": case.get("attachment_name", ""),
                 "identifiers": case["identifiers"],
                 "query": case["query"],
                 "search_reference": case_search_id,

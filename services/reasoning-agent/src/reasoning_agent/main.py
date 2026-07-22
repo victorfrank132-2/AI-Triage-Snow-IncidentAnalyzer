@@ -57,11 +57,20 @@ def _extract_observed_signals(evidence: list[dict[str, Any]]) -> dict[str, list[
         re.findall(r"\b(?:GET|POST|PUT|DELETE|PATCH)\s+/api/[A-Za-z0-9/_-]+\b", joined_text)
     )
     api_paths = _unique(re.findall(r"\b/api/[A-Za-z0-9/_-]+\b", joined_text))
+    error_messages = _unique(
+        re.findall(
+            r"(?:Error Message|Message)\s*[:\-]\s*([^\n\r*]+)",
+            joined_text,
+            flags=re.IGNORECASE,
+        )
+    )
+    error_messages = [message.strip(" .") for message in error_messages if message.strip(" .")]
     return {
         "request_ids": request_ids,
         "policy_ids": policy_ids,
         "quote_ids": quote_ids,
         "error_codes": error_codes,
+        "error_messages": error_messages,
         "status_codes": status_codes,
         "response_times": response_times,
         "method_endpoints": method_endpoints,
@@ -123,14 +132,22 @@ def _build_grounded_analysis(
     triage_points.append(f"RAG route selected: {route.route.value} (confidence {route.confidence:.2f}).")
 
     case_results = attachment_case_results or []
+    attachment_name_by_ref = {
+        str(item.get("sys_id", "")): str(item.get("file_name", ""))
+        for item in incident.get("attachments", [])
+        if str(item.get("sys_id", "")).strip()
+    }
     case_lines: list[str] = []
     for case in case_results:
         attachment_ref = str(case.get("attachment_reference", "unknown"))
+        attachment_name = attachment_name_by_ref.get(attachment_ref) or str(
+            case.get("attachment_name", "attachment")
+        )
         identifiers = ", ".join(str(value) for value in case.get("identifiers", [])[:6])
         row_count = case.get("row_count")
         row_text = "unknown" if row_count is None else str(row_count)
         case_lines.append(
-            f"Attachment {attachment_ref}: identifiers [{identifiers}] -> Splunk rows {row_text}."
+            f"{attachment_name}: identifiers [{identifiers}] -> Splunk rows {row_text}."
         )
 
     quote_related = bool(signals["quote_ids"]) or any("/quotes" in endpoint for endpoint in endpoints)
@@ -141,6 +158,10 @@ def _build_grounded_analysis(
     if case_lines:
         rca_sections.append("Case-by-case log analysis:")
         rca_sections.extend(f"- {line}" for line in case_lines)
+
+    if signals["error_messages"]:
+        rca_sections.append("Observed error messages:")
+        rca_sections.extend(f"- {message}" for message in signals["error_messages"][:8])
 
     if service_related:
         rca_sections.append(
@@ -163,8 +184,27 @@ def _build_grounded_analysis(
     else:
         rca_sections.append("Policies RCA: No policy-specific failure signal was confidently observed.")
 
+    rca_sections.append("Recommended remediation:")
+    if signals["error_messages"]:
+        rca_sections.append(
+            "- Reproduce and trace the exact error messages in service logs for matching request IDs before restart/redeploy actions."
+        )
+    if quote_related:
+        rca_sections.append(
+            "- Validate quote/premium calculation dependencies (pricing/rules service) and recent deployment/config changes."
+        )
+    if policy_related:
+        rca_sections.append(
+            "- Validate underwriting/policy decision dependencies and upstream timeout thresholds for affected endpoints."
+        )
+    if service_related:
+        rca_sections.append(
+            "- Check gateway and service timeout/error-rate metrics for affected API endpoints during failure timestamps."
+        )
+    rca_sections.append("- Confirm fix with a targeted replay using the same request identifiers.")
+
     rca_sections.append(
-        "Conclusion: treat this RCA as triage guidance based on observed evidence and confirm with service owners before remediation."
+        "Conclusion: RCA is derived from observed logs and should be confirmed by service owners during incident triage."
     )
     possible_rca = "\n".join(rca_sections)
     rationale_summary = (
@@ -172,7 +212,10 @@ def _build_grounded_analysis(
         "No hidden reasoning traces are included."
     )
     return {
-        "recommendation": " ".join(summary_parts),
+        "recommendation": (
+            "Observed evidence indicates a service-side failure pattern affecting quote and underwriting paths. "
+            + " ".join(summary_parts)
+        ),
         "triage_points": _unique(triage_points),
         "possible_rca": possible_rca,
         "rationale_summary": rationale_summary,
