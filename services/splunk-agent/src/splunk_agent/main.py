@@ -185,7 +185,7 @@ def _extract_context_terms(context_summary: str) -> list[str]:
         r"\bERR_[A-Za-z0-9_]+\b",
         r"\b(?:GET|POST|PUT|DELETE|PATCH)\s+/api/[A-Za-z0-9/_-]+\b",
         r"\b(?:GET|POST|PUT|DELETE|PATCH)\s+(/api/[A-Za-z0-9/_-]+)",
-        r"\b(/api/[A-Za-z0-9/_-]+)",
+        r"(/api/[A-Za-z0-9/_-]+)",
     ]
     for pattern in patterns:
         for match in re.finditer(pattern, text):

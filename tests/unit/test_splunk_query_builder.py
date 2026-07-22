@@ -53,3 +53,16 @@ def test_build_attachment_case_queries_uses_each_attachment_summary(monkeypatch)
 
 def test_extract_requested_log_limit_parses_last_n_logs() -> None:
     assert splunk_main._extract_requested_log_limit("get last 20 logs", "") == 20
+
+
+def test_endpoint_only_request_keeps_single_endpoint_identifier(monkeypatch) -> None:
+    monkeypatch.delenv("SPLUNK_INDEXES", raising=False)
+    extracted = splunk_main._extract_context_terms(
+        "get last 20 logs for /api/v1/life/underwriting"
+    )
+    query = splunk_main._build_query(extracted, limit=20)
+
+    assert '"/api/v1/life/underwriting"' in query
+    assert '"underwriting"' not in query
+    assert '"life"' not in query
+    assert "| head 20" in query
