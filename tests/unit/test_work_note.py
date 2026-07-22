@@ -5,6 +5,7 @@ def test_work_note_uses_evidence_and_not_hidden_reasoning() -> None:
     result = build_graph().invoke(
         {
             "recommendation": "Restart the failed worker after approval.",
+            "rationale_summary": "Likely upstream timeout on underwriting dependency.",
             "evidence": [
                 {"source": "splunk", "summary": "Five matching timeout events."},
                 {
@@ -17,8 +18,12 @@ def test_work_note_uses_evidence_and_not_hidden_reasoning() -> None:
             ],
         }
     )
-    assert "Five matching timeout events." in result["work_note_markdown"]
-    assert "REQ-763579" not in result["work_note_markdown"]
-    assert "GET /api/v1/life/underwriting" not in result["work_note_markdown"]
-    assert "Attachment-derived operational details" in result["work_note_markdown"]
-    assert "model reasoning traces" in result["work_note_markdown"]
+    note = result["work_note_markdown"]
+    assert "Summary:" in note
+    assert "Triage Points:" in note
+    assert "Possible RCA:" in note
+    assert "Evidence metrics (Images/Splunk Query):" in note
+    assert "Short AI response disclaimer:" in note
+    assert "Five matching timeout events." in note
+    assert "REQ-763579" in note
+    assert "model reasoning traces" not in note

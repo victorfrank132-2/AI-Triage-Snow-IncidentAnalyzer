@@ -14,7 +14,7 @@ from snow_intelligence.splunk import validate_splunk_query
 from snow_intelligence.stages import load_stage
 
 
-_DEFAULT_SPLUNK_INDEXES = "servicenow,life_api_logs,life_ui_logs,pc_api_logs,pc_ui_logs"
+_DEFAULT_SPLUNK_INDEXES = "life_api_logs,life_ui_logs,pc_api_logs,pc_ui_logs"
 
 
 def _csv_set(value: str) -> set[str]:
@@ -69,6 +69,12 @@ def _normalize_base_url(raw_url: str) -> str:
 def _ensure_search_prefix(query: str) -> str:
     stripped = query.strip()
     return stripped if stripped.lower().startswith("search ") else f"search {stripped}"
+
+
+def _earliest_time_value(earliest_hours_ago: int) -> str:
+    if earliest_hours_ago <= 0:
+        return "0"
+    return f"-{earliest_hours_ago}h"
 
 
 def _count_export_rows(response_text: str) -> int:
@@ -127,11 +133,15 @@ def _extract_context_terms(context_summary: str) -> list[str]:
 
 def _build_query(incident_number: str, context_summary: str) -> str:
     indexes = _query_indexes()
-    index_clause = "(" + " OR ".join(f"index={index_name}" for index_name in indexes) + ")"
-    signal_terms = [f'incident_number="{incident_number}"']
-    signal_terms.extend(f'"{term}"' for term in _extract_context_terms(context_summary)[:6])
-    signal_clause = "(" + " OR ".join(signal_terms) + ")"
-    return f"{index_clause} {signal_clause} | head 50"
+    index_clause = " OR ".join(f"index={index_name}" for index_name in indexes)
+
+    identifier_terms = [incident_number]
+    for term in _extract_context_terms(context_summary):
+        if term not in identifier_terms:
+            identifier_terms.append(term)
+
+    identifiers_clause = " OR ".join(f'"{term}"' for term in identifier_terms[:8])
+    return f"{index_clause} ({identifiers_clause}) | head 50"
 
 
 def _web_proxy_login(session: requests.Session, base_url: str, username: str, password: str) -> str:
@@ -175,7 +185,7 @@ def _execute_query_web_proxy(base_url: str, request: SplunkQueryRequest) -> tupl
         },
         data={
             "search": search,
-            "earliest_time": f"-{request.earliest_hours_ago}h",
+            "earliest_time": _earliest_time_value(request.earliest_hours_ago),
             "output_mode": "json_rows",
             "count": request.max_rows,
         },
@@ -196,7 +206,11 @@ def _execute_query(request: SplunkQueryRequest) -> tuple[str, str]:
     query = _ensure_search_prefix(request.query)
     submitted = requests.post(
         f"{base_url}/services/search/jobs",
-        data={"search": query, "earliest_time": f"-{request.earliest_hours_ago}h", "output_mode": "json"},
+        data={
+            "search": query,
+            "earliest_time": _earliest_time_value(request.earliest_hours_ago),
+            "output_mode": "json",
+        },
         auth=auth,
         timeout=(5, 20),
     )
@@ -221,7 +235,7 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
     query = _build_query(incident_number, context_stage.get("incident_summary", ""))
     request = SplunkQueryRequest(
         query=query,
-        earliest_hours_ago=4,
+        earliest_hours_ago=0,
         max_rows=50,
     )
     validate_splunk_query(request, _policy())

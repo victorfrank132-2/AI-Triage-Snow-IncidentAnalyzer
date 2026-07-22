@@ -24,36 +24,63 @@ def _normalize_summary(value: Any, max_length: int = 220) -> str:
     return f"{text[: max_length - 3]}..."
 
 
-def _compact_evidence_lines(evidence: list[dict[str, Any]]) -> str:
-    lines: list[str] = []
-    has_attachment_evidence = False
+def _triage_points(evidence: list[dict[str, Any]]) -> str:
+    points: list[str] = []
+    for item in evidence:
+        summary = _normalize_summary(item.get("summary", ""))
+        if summary and summary not in points:
+            points.append(summary)
+        if len(points) >= 4:
+            break
+    if not points:
+        return "- No high-confidence triage signal was extracted."
+    return "\n".join(f"- {point}" for point in points)
+
+
+def _evidence_metrics(evidence: list[dict[str, Any]]) -> str:
+    splunk_refs: list[str] = []
+    image_refs: list[str] = []
+
     for item in evidence:
         source = str(item.get("source", "unknown")).strip().lower()
-        summary = _normalize_summary(item.get("summary", ""))
-        if source == "attachment":
-            has_attachment_evidence = True
-            continue
-        if summary:
-            lines.append(f"- [{source}] {summary}")
+        reference = _normalize_summary(item.get("reference", ""), max_length=140)
+        summary = _normalize_summary(item.get("summary", ""), max_length=180)
+        metric = reference or summary
+        if source == "splunk" and metric:
+            splunk_refs.append(metric)
+        if source == "attachment" and metric:
+            image_refs.append(metric)
 
-    if has_attachment_evidence:
-        lines.append(
-            "- [attachment] Attachment-derived operational details are available in the evidence attachment file."
-        )
+    lines: list[str] = []
+    if splunk_refs:
+        lines.append(f"- Splunk Query: {splunk_refs[0]}")
+    else:
+        lines.append("- Splunk Query: Not available.")
 
-    return "\n".join(lines) or "- No corroborating evidence was available."
+    if image_refs:
+        lines.append(f"- Images: {image_refs[0]}")
+    else:
+        lines.append("- Images: Not available.")
+
+    return "\n".join(lines)
 
 
 def _compose_note(state: ReasoningState) -> ReasoningState:
-    evidence_lines = _compact_evidence_lines(state.get("evidence", []))
-    recommendation = state["recommendation"]
+    evidence = state.get("evidence", [])
+    recommendation = _normalize_summary(state.get("recommendation", ""), max_length=700)
+    possible_rca = _normalize_summary(state.get("rationale_summary", ""), max_length=700)
     return {
         "work_note_markdown": (
-            "AI incident analysis\n\n"
-            f"Recommendation: {recommendation}\n\n"
-            "Evidence references:\n"
-            f"{evidence_lines}\n\n"
-            "This is an evidence-based summary for operator review; it does not contain model reasoning traces."
+            "Summary:\n"
+            f"{recommendation}\n\n"
+            "Triage Points:\n"
+            f"{_triage_points(evidence)}\n\n"
+            "Possible RCA:\n"
+            f"{possible_rca or 'RCA is not yet confirmed; continue operator validation.'}\n\n"
+            "Evidence metrics (Images/Splunk Query):\n"
+            f"{_evidence_metrics(evidence)}\n\n"
+            "Short AI response disclaimer:\n"
+            "AI-generated operational summary. Validate against logs, telemetry, and runbooks before closure."
         )
     }
 

@@ -20,6 +20,15 @@ def test_guardrails_allow_approved_read_query() -> None:
     )
 
 
+def test_guardrails_allow_all_time_when_within_policy() -> None:
+    validate_splunk_query(
+        SplunkQueryRequest(
+            query='index=servicenow incident_number="INC1" | head 20', earliest_hours_ago=0
+        ),
+        POLICY,
+    )
+
+
 def test_guardrails_reject_write_capable_command() -> None:
     with pytest.raises(SplunkPolicyViolation):
         validate_splunk_query(

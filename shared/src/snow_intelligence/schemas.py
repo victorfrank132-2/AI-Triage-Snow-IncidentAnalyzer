@@ -111,7 +111,7 @@ class SplunkQueryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str = Field(min_length=1, max_length=8_000)
-    earliest_hours_ago: int = Field(default=4, ge=1, le=168)
+    earliest_hours_ago: int = Field(default=0, ge=0, le=168)
     max_rows: int = Field(default=50, ge=1, le=1_000)
 
 
