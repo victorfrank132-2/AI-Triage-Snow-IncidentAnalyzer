@@ -81,9 +81,22 @@ def _extract_observed_signals(evidence: list[dict[str, Any]]) -> dict[str, list[
 def _extract_attachment_log_facts(summary: str) -> dict[str, list[str]]:
     """Extract raw observable facts from a single attachment summary string."""
     text = str(summary or "")
+
+    code_pattern = (
+        r"(?:\*\*\s*)?(?:Error Code|Status Code|status)(?:\s*\*\*)?\s*[:\-]\s*([^\n\r*]+)"
+        r"|(?:\*\*\s*)?(?:Error Code|Status Code|status)\s*[:\-]\s*(?:\*\*\s*)?([^\n\r*]+)"
+    )
+    message_pattern = (
+        r"(?:\*\*\s*)?(?:Error Message|Message)(?:\s*\*\*)?\s*[:\-]\s*([^\n\r*]+)"
+        r"|(?:\*\*\s*)?(?:Error Message|Message)\s*[:\-]\s*(?:\*\*\s*)?([^\n\r*]+)"
+    )
+
+    error_codes = [match[0] or match[1] for match in re.findall(code_pattern, text, re.IGNORECASE)]
+    error_messages = [match[0] or match[1] for match in re.findall(message_pattern, text, re.IGNORECASE)]
+
     facts: dict[str, list[str]] = {
-        "error_codes": _unique(re.findall(r"(?:\*\*\s*)?(?:Error Code|Status Code|status)(?:\s*\*\*)?\s*[:\-]\s*([^\n\r*]+)", text, re.IGNORECASE)),
-        "error_messages": _unique(re.findall(r"(?:\*\*\s*)?(?:Error Message|Message)(?:\s*\*\*)?\s*[:\-]\s*([^\n\r*]+)", text, re.IGNORECASE)),
+        "error_codes": _unique(error_codes),
+        "error_messages": _unique(error_messages),
         "request_ids": _unique(re.findall(r"\bREQ-[A-Za-z0-9-]+\b", text)),
         "policy_ids": _unique(re.findall(r"\bTERM-[A-Za-z0-9-]+\b", text)),
         "quote_ids": _unique(re.findall(r"\bQ-[A-Za-z0-9-]+\b", text)),

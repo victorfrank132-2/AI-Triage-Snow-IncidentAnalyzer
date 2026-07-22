@@ -69,3 +69,44 @@ def test_grounded_analysis_triage_points_are_full_lines() -> None:
     assert "service_rca" in grounded["llm_rca_hints"]
     assert "quotes_rca" in grounded["llm_rca_hints"]
     assert "policies_rca" in grounded["llm_rca_hints"]
+
+
+def test_grounded_analysis_extracts_markdown_labeled_error_message() -> None:
+    route = RouteDecision(
+        route=RouteKind.FULL,
+        confidence=0.0,
+        rationale_summary="No comparable resolved incident was retrieved.",
+    )
+    evidence = [
+        {
+            "source": "attachment",
+            "reference": "att-2",
+            "summary": "**Error Code:** ERR_502 **Error Message:** Upstream timeout at underwriting service Request ID: REQ-763579 Endpoint: GET /api/v1/life/underwriting",
+        },
+        {
+            "source": "splunk",
+            "summary": "Splunk returned 5 guardrailed evidence rows.",
+        },
+    ]
+
+    grounded = _build_grounded_analysis(
+        incident={
+            "incident_number": "INC0010114",
+            "attachments": [{"sys_id": "att-2", "file_name": "underwriting-failure (1).png"}],
+        },
+        evidence=evidence,
+        splunk_query='index=life_api_logs ("REQ-763579") | head 50',
+        route=route,
+        attachment_case_results=[
+            {
+                "attachment_reference": "att-2",
+                "attachment_name": "underwriting-failure (1).png",
+                "identifiers": ["REQ-763579", "GET /api/v1/life/underwriting"],
+                "row_count": 5,
+            }
+        ],
+        attachment_evidence_list=evidence,
+    )
+
+    assert "Attachment: underwriting-failure (1).png" in grounded["possible_rca"]
+    assert "Error Message: Upstream timeout at underwriting service" in grounded["possible_rca"]
