@@ -120,6 +120,34 @@ def _extract_splunk_row_signal(evidence: list[dict[str, Any]]) -> str:
     return "unknown"
 
 
+def _is_log_retrieval_request(short_description: str, description: str) -> bool:
+    text = f"{short_description} {description}"
+    patterns = [
+        r"\blast\s+\d{1,4}\s+logs?\b",
+        r"\b(?:get|fetch|retrieve|pull)\s+(?:the\s+)?(?:last\s+\d{1,4}\s+)?logs?\b",
+        r"\blog\s+retrieval\b",
+    ]
+    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
+
+
+def _build_log_retrieval_note(
+    incident_number: str,
+    splunk_query: str,
+    evidence: list[dict[str, Any]],
+) -> str:
+    row_count = _extract_splunk_row_signal(evidence)
+    lines = [
+        "Log Retrieval",
+        f"- Incident: {incident_number}",
+        f"- Splunk query executed: {splunk_query or 'not available'}",
+        f"- Matched rows: {row_count}",
+        "- Attachments include raw outputs: splunk-results.json, splunk-case-results.json, splunk-stage.json.",
+        "",
+        "Triage analysis was intentionally skipped because this incident matched log-retrieval intent.",
+    ]
+    return "\n".join(lines)
+
+
 def _build_grounded_analysis(
     incident: dict[str, Any],
     evidence: list[dict[str, Any]],
@@ -304,6 +332,10 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
     ]
     splunk_query_text = splunk_stage.get("query", {}).get("query", "")
     attachment_case_results = splunk_stage.get("attachment_case_results", [])
+    is_log_retrieval = _is_log_retrieval_request(
+        str(incident.get("short_description", "")),
+        str(incident.get("description", "")),
+    )
     structured_analysis: dict[str, Any] = {}
     llm_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
     grounded = _build_grounded_analysis(
@@ -314,6 +346,39 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
         attachment_case_results=attachment_case_results,
         attachment_evidence_list=attachment_stage.get("evidence", []),
     )
+
+    if is_log_retrieval:
+        recommendation = "Requested log retrieval completed."
+        rationale = "Triage synthesis skipped for log-retrieval request."
+        note = WorkNote(
+            incident_number=incident["incident_number"],
+            work_note_markdown=_build_log_retrieval_note(
+                incident["incident_number"], splunk_query_text, evidence
+            ),
+            recommendation=recommendation,
+            rationale_summary=rationale,
+            confidence=route.confidence,
+            evidence=[EvidenceReference.model_validate(item) for item in evidence],
+            requires_human_review=False,
+        )
+        return {
+            "work_note": note.model_dump(mode="json"),
+            "llm_inference": {
+                "route": route.route.value,
+                "route_confidence": route.confidence,
+                "input_summary": {
+                    "incident_number": incident.get("incident_number"),
+                    "splunk_query": splunk_query_text,
+                    "prior_context_present": bool(route.candidate),
+                    "evidence_count": len(evidence),
+                },
+                "structured_analysis": {},
+                "grounded_analysis": {k: v for k, v in grounded.items() if k != "llm_rca_hints"},
+                "llm_rca_hints": grounded.get("llm_rca_hints", {}),
+                "token_usage": llm_usage,
+                "log_retrieval_mode": True,
+            },
+        }
 
     if context.mock_mode:
         recommendation = grounded["recommendation"]

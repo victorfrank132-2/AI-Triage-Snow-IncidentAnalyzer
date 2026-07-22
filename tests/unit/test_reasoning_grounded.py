@@ -8,7 +8,7 @@ from snow_intelligence.schemas import RouteDecision, RouteKind
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "services" / "reasoning-agent" / "src"))
 
-from reasoning_agent.main import _build_grounded_analysis
+from reasoning_agent.main import _build_grounded_analysis, _is_log_retrieval_request
 
 
 def test_grounded_analysis_triage_points_are_full_lines() -> None:
@@ -110,3 +110,14 @@ def test_grounded_analysis_extracts_markdown_labeled_error_message() -> None:
 
     assert "Attachment: underwriting-failure (1).png" in grounded["possible_rca"]
     assert "Error Message: Upstream timeout at underwriting service" in grounded["possible_rca"]
+
+
+def test_is_log_retrieval_request_detects_last_n_logs() -> None:
+    assert _is_log_retrieval_request("get last 20 logs", "for /api/v1/life/underwriting")
+
+
+def test_is_log_retrieval_request_ignores_normal_failure_incident() -> None:
+    assert not _is_log_retrieval_request(
+        "premium calculation failing with ERR_502",
+        "Need RCA and remediation steps for underwriting and quotes failures",
+    )
