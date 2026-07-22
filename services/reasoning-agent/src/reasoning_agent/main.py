@@ -124,8 +124,10 @@ def _is_log_retrieval_request(short_description: str, description: str) -> bool:
     text = f"{short_description} {description}"
     patterns = [
         r"\blast\s+\d{1,4}\s+logs?\b",
-        r"\b(?:get|fetch|retrieve|pull)\s+(?:the\s+)?(?:last\s+\d{1,4}\s+)?logs?\b",
-        r"\blog\s+retrieval\b",
+        r"\b(?:get|fetch|retrieve|retrive|pull)\s+(?:the\s+)?(?:last\s+\d{1,4}\s+)?logs?\b",
+        r"\blog[-\s]*retr(?:ie)?val\b",
+        r"\blog[-\s]*retrival\b",
+        r"\blog[-\s]*reetrival\b",
     ]
     return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
 
@@ -332,7 +334,7 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
     ]
     splunk_query_text = splunk_stage.get("query", {}).get("query", "")
     attachment_case_results = splunk_stage.get("attachment_case_results", [])
-    is_log_retrieval = _is_log_retrieval_request(
+    is_log_retrieval = bool(splunk_stage.get("log_retrieval_intent", False)) or _is_log_retrieval_request(
         str(incident.get("short_description", "")),
         str(incident.get("description", "")),
     )

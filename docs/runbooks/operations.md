@@ -22,6 +22,7 @@
 ## Log retrieval incident behavior
 
 1. Incidents that match log-retrieval intent (for example, "get last N logs") intentionally skip full triage synthesis.
+2. Detection is typo-tolerant for common variants such as "log-retrival" and "log-reetrival".
 2. Work note contains an operational retrieval summary and points responders to attached artifacts.
 3. Attached bundle includes `splunk-results.json`, `splunk-case-results.json`, and `splunk-stage.json` for auditability.
 

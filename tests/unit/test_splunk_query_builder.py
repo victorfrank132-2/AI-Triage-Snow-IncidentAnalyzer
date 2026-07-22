@@ -55,6 +55,10 @@ def test_extract_requested_log_limit_parses_last_n_logs() -> None:
     assert splunk_main._extract_requested_log_limit("get last 20 logs", "") == 20
 
 
+def test_log_retrieval_detection_handles_common_misspelling() -> None:
+    assert splunk_main._is_log_retrieval_request("log-retrival request", "get last 15 logs")
+
+
 def test_endpoint_only_request_keeps_single_endpoint_identifier(monkeypatch) -> None:
     monkeypatch.delenv("SPLUNK_INDEXES", raising=False)
     extracted = splunk_main._extract_context_terms(

@@ -121,3 +121,10 @@ def test_is_log_retrieval_request_ignores_normal_failure_incident() -> None:
         "premium calculation failing with ERR_502",
         "Need RCA and remediation steps for underwriting and quotes failures",
     )
+
+
+def test_is_log_retrieval_request_handles_common_misspelling() -> None:
+    assert _is_log_retrieval_request(
+        "log-retrival incident",
+        "please get last 20 logs for /api/v1/life/underwriting",
+    )

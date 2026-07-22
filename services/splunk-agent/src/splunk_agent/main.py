@@ -175,6 +175,18 @@ def _extract_requested_log_limit(short_description: str, description: str) -> in
     return max(1, min(requested, 1000))
 
 
+def _is_log_retrieval_request(short_description: str, description: str) -> bool:
+    text = f"{short_description} {description}"
+    patterns = [
+        r"\blast\s+\d{1,4}\s+logs?\b",
+        r"\b(?:get|fetch|retrieve|retrive|pull)\s+(?:the\s+)?(?:last\s+\d{1,4}\s+)?logs?\b",
+        r"\blog[-\s]*retr(?:ie)?val\b",
+        r"\blog[-\s]*retrival\b",
+        r"\blog[-\s]*reetrival\b",
+    ]
+    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
+
+
 def _extract_context_terms(context_summary: str) -> list[str]:
     text = str(context_summary or "")
     terms: list[str] = []
@@ -368,6 +380,10 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
         str(payload["incident"].get("short_description", "")),
         str(payload["incident"].get("description", "")),
     )
+    log_retrieval_intent = _is_log_retrieval_request(
+        str(payload["incident"].get("short_description", "")),
+        str(payload["incident"].get("description", "")),
+    )
 
     attachment_name_by_ref = {
         str(item.get("sys_id", "")): str(item.get("file_name", ""))
@@ -456,6 +472,8 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
         "evidence": [evidence.model_dump()],
         "results": result_rows,
         "attachment_case_results": case_results,
+        "log_retrieval_intent": log_retrieval_intent,
+        "requested_log_limit": requested_log_limit,
     }
 
 
