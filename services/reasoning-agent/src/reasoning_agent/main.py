@@ -78,6 +78,24 @@ def _extract_observed_signals(evidence: list[dict[str, Any]]) -> dict[str, list[
     }
 
 
+def _extract_attachment_log_facts(summary: str) -> dict[str, list[str]]:
+    """Extract raw observable facts from a single attachment summary string."""
+    text = str(summary or "")
+    facts: dict[str, list[str]] = {
+        "error_codes": _unique(re.findall(r"(?:Error Code|Status Code|status)\s*[:\-]\s*([^\n\r*]+)", text, re.IGNORECASE)),
+        "error_messages": _unique(re.findall(r"(?:Error Message|Message)\s*[:\-]\s*([^\n\r*]+)", text, re.IGNORECASE)),
+        "request_ids": _unique(re.findall(r"\bREQ-[A-Za-z0-9-]+\b", text)),
+        "policy_ids": _unique(re.findall(r"\bTERM-[A-Za-z0-9-]+\b", text)),
+        "quote_ids": _unique(re.findall(r"\bQ-[A-Za-z0-9-]+\b", text)),
+        "endpoints": _unique(re.findall(r"\b(?:GET|POST|PUT|DELETE|PATCH)\s+/api/[A-Za-z0-9/_-]+\b", text)),
+        "response_times": _unique(re.findall(r"\b\d{2,6}\s*ms\b", text, re.IGNORECASE)),
+    }
+    # strip trailing spaces/asterisks from extracted values
+    for key in facts:
+        facts[key] = [v.strip(" .*") for v in facts[key] if v.strip(" .*")]
+    return facts
+
+
 def _extract_splunk_row_signal(evidence: list[dict[str, Any]]) -> str:
     for item in evidence:
         if str(item.get("source", "")).lower() != "splunk":
@@ -95,26 +113,32 @@ def _build_grounded_analysis(
     splunk_query: str,
     route: RouteDecision,
     attachment_case_results: list[dict[str, Any]] | None = None,
+    attachment_evidence_list: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     signals = _extract_observed_signals(evidence)
     splunk_rows = _extract_splunk_row_signal(evidence)
     endpoints = signals["method_endpoints"] or signals["api_paths"]
 
-    summary_parts: list[str] = []
-    if signals["status_codes"]:
-        summary_parts.append(f"Observed HTTP status codes: {', '.join(signals['status_codes'][:5])}.")
-    if signals["error_codes"]:
-        summary_parts.append(f"Observed application error codes: {', '.join(signals['error_codes'][:6])}.")
-    if endpoints:
-        summary_parts.append(f"Impacted endpoints: {', '.join(endpoints[:6])}.")
-    if signals["response_times"]:
-        summary_parts.append(f"Observed response times: {', '.join(signals['response_times'][:6])}.")
-    summary_parts.append(f"Splunk evidence rows returned: {splunk_rows}.")
-    if not (signals["status_codes"] or signals["error_codes"] or endpoints):
-        summary_parts.append(
-            "Attachment and context evidence did not expose concrete API/error identifiers; further log capture is required."
+    # ── Summary: analytic sentence, not a numeric dump ──────────────────────
+    if endpoints and (signals["error_codes"] or signals["status_codes"]):
+        endpoint_str = ", ".join(endpoints[:3])
+        error_str = ", ".join((signals["error_codes"] or signals["status_codes"])[:3])
+        summary = (
+            f"Service-side failures ({error_str}) observed on {endpoint_str}. "
+            f"Splunk log search returned {splunk_rows} matched rows across app/api indexes."
+        )
+    elif endpoints:
+        summary = (
+            f"Failures observed on endpoints: {', '.join(endpoints[:3])}. "
+            f"Splunk log search returned {splunk_rows} matched rows."
+        )
+    else:
+        summary = (
+            "No specific API endpoint pattern was identified from available evidence. "
+            "Splunk log search returned {splunk_rows} matched rows; further log capture may be required."
         )
 
+    # ── Triage points ────────────────────────────────────────────────────────
     triage_points: list[str] = []
     if signals["request_ids"]:
         triage_points.append(f"Request IDs observed: {', '.join(signals['request_ids'][:6])}.")
@@ -131,63 +155,74 @@ def _build_grounded_analysis(
     )
     triage_points.append(f"RAG route selected: {route.route.value} (confidence {route.confidence:.2f}).")
 
+    # ── Build lookup maps ────────────────────────────────────────────────────
     case_results = attachment_case_results or []
     attachment_name_by_ref = {
         str(item.get("sys_id", "")): str(item.get("file_name", ""))
         for item in incident.get("attachments", [])
         if str(item.get("sys_id", "")).strip()
     }
-    case_lines: list[str] = []
+    attachment_summary_by_ref: dict[str, str] = {}
+    for att_ev in (attachment_evidence_list or evidence):
+        if str(att_ev.get("source", "")).lower() == "attachment":
+            ref = str(att_ev.get("reference", ""))
+            if ref:
+                attachment_summary_by_ref[ref] = str(att_ev.get("summary", ""))
+
+    # ── Case-by-case attachment log analysis ─────────────────────────────────
+    rca_sections: list[str] = ["Case-by-case log analysis:"]
+    any_case = False
     for case in case_results:
         attachment_ref = str(case.get("attachment_reference", "unknown"))
-        attachment_name = attachment_name_by_ref.get(attachment_ref) or str(
-            case.get("attachment_name", "attachment")
+        attachment_name = (
+            attachment_name_by_ref.get(attachment_ref)
+            or case.get("attachment_name", "")
+            or attachment_ref
         )
-        identifiers = ", ".join(str(value) for value in case.get("identifiers", [])[:6])
         row_count = case.get("row_count")
         row_text = "unknown" if row_count is None else str(row_count)
-        case_lines.append(
-            f"{attachment_name}: identifiers [{identifiers}] -> Splunk rows {row_text}."
-        )
 
-    quote_related = bool(signals["quote_ids"]) or any("/quotes" in endpoint for endpoint in endpoints)
-    policy_related = bool(signals["policy_ids"]) or any("/underwriting" in endpoint for endpoint in endpoints)
+        summary_text = attachment_summary_by_ref.get(attachment_ref, "")
+        facts = _extract_attachment_log_facts(summary_text)
+
+        has_id = bool(facts["request_ids"] or facts["policy_ids"] or facts["quote_ids"])
+        if not has_id and not facts["error_codes"] and not facts["error_messages"]:
+            continue
+
+        any_case = True
+        rca_sections.append(f"")
+        rca_sections.append(f"{attachment_name} (Splunk rows matched: {row_text}):")
+        if facts["request_ids"]:
+            rca_sections.append(f"  - Request ID: {', '.join(facts['request_ids'][:4])}")
+        if facts["policy_ids"]:
+            rca_sections.append(f"  - Policy ID: {', '.join(facts['policy_ids'][:4])}")
+        if facts["quote_ids"]:
+            rca_sections.append(f"  - Quote ID: {', '.join(facts['quote_ids'][:4])}")
+        if facts["endpoints"]:
+            rca_sections.append(f"  - Endpoint: {', '.join(facts['endpoints'][:3])}")
+        if facts["error_codes"]:
+            rca_sections.append(f"  - Error Code: {', '.join(facts['error_codes'][:3])}")
+        for msg in facts["error_messages"][:3]:
+            rca_sections.append(f"  - Error Message: {msg}")
+        if facts["response_times"]:
+            rca_sections.append(f"  - Response Time: {', '.join(facts['response_times'][:2])}")
+
+    if not any_case:
+        rca_sections.append("- No attachment with recognisable identifiers was matched to Splunk results.")
+
+    # ── Recommended remediation ──────────────────────────────────────────────
+    quote_related = bool(signals["quote_ids"]) or any("/quotes" in ep for ep in endpoints)
+    policy_related = bool(signals["policy_ids"]) or any("/underwriting" in ep for ep in endpoints)
     service_related = bool(endpoints)
 
-    rca_sections: list[str] = []
-    if case_lines:
-        rca_sections.append("Case-by-case log analysis:")
-        rca_sections.extend(f"- {line}" for line in case_lines)
-
-    if signals["error_messages"]:
-        rca_sections.append("Observed error messages:")
-        rca_sections.extend(f"- {message}" for message in signals["error_messages"][:8])
-
-    if service_related:
-        rca_sections.append(
-            "Service RCA: API service endpoints show repeated failure patterns and should be checked for upstream dependency and gateway timeout behavior."
-        )
-    else:
-        rca_sections.append("Service RCA: No service endpoint pattern was confidently observed in available evidence.")
-
-    if quote_related:
-        rca_sections.append(
-            "Quotes RCA: Quote-related endpoint failures are present; validate quote/premium calculation path and downstream quote services."
-        )
-    else:
-        rca_sections.append("Quotes RCA: No quote-specific failure signal was confidently observed.")
-
-    if policy_related:
-        rca_sections.append(
-            "Policies RCA: Policy/underwriting signals are present; validate underwriting decision dependencies and policy service timeouts."
-        )
-    else:
-        rca_sections.append("Policies RCA: No policy-specific failure signal was confidently observed.")
-
+    rca_sections.append("")
     rca_sections.append("Recommended remediation:")
-    if signals["error_messages"]:
+    if signals["error_messages"] or any(
+        _extract_attachment_log_facts(s)["error_messages"]
+        for s in attachment_summary_by_ref.values()
+    ):
         rca_sections.append(
-            "- Reproduce and trace the exact error messages in service logs for matching request IDs before restart/redeploy actions."
+            "- Trace exact error messages above in service logs for the listed request IDs before restart/redeploy actions."
         )
     if quote_related:
         rca_sections.append(
@@ -201,24 +236,43 @@ def _build_grounded_analysis(
         rca_sections.append(
             "- Check gateway and service timeout/error-rate metrics for affected API endpoints during failure timestamps."
         )
-    rca_sections.append("- Confirm fix with a targeted replay using the same request identifiers.")
-
+    rca_sections.append("- Confirm fix with a targeted replay using the same request identifiers listed above.")
+    rca_sections.append("")
     rca_sections.append(
-        "Conclusion: RCA is derived from observed logs and should be confirmed by service owners during incident triage."
+        "Conclusion: RCA is derived from observed attachment logs and should be confirmed by service owners before remediation."
     )
+
     possible_rca = "\n".join(rca_sections)
+
+    # ── RCA hints for LLM inference only (not rendered in work note) ─────────
+    llm_rca_hints = {
+        "service_rca": (
+            "API service endpoints show repeated failure patterns; check upstream dependency and gateway timeout."
+            if service_related
+            else "No service endpoint pattern confidently observed."
+        ),
+        "quotes_rca": (
+            "Quote-related endpoint failures present; validate quote/premium calculation path."
+            if quote_related
+            else "No quote-specific failure signal confidently observed."
+        ),
+        "policies_rca": (
+            "Policy/underwriting signals present; validate underwriting decision dependencies."
+            if policy_related
+            else "No policy-specific failure signal confidently observed."
+        ),
+    }
+
     rationale_summary = (
         "Work note is evidence-grounded using extracted identifiers, endpoint patterns, and Splunk row signal. "
         "No hidden reasoning traces are included."
     )
     return {
-        "recommendation": (
-            "Observed evidence indicates a service-side failure pattern affecting quote and underwriting paths. "
-            + " ".join(summary_parts)
-        ),
+        "recommendation": summary,
         "triage_points": _unique(triage_points),
         "possible_rca": possible_rca,
         "rationale_summary": rationale_summary,
+        "llm_rca_hints": llm_rca_hints,
     }
 
 
@@ -244,6 +298,7 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
         splunk_query_text,
         route,
         attachment_case_results=attachment_case_results,
+        attachment_evidence_list=attachment_stage.get("evidence", []),
     )
 
     if context.mock_mode:
@@ -340,7 +395,8 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
                 "evidence_count": len(evidence),
             },
             "structured_analysis": structured_analysis,
-            "grounded_analysis": grounded,
+            "grounded_analysis": {k: v for k, v in grounded.items() if k != "llm_rca_hints"},
+            "llm_rca_hints": grounded.get("llm_rca_hints", {}),
             "token_usage": llm_usage,
         },
     }

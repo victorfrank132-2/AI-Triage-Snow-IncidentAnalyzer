@@ -20,6 +20,7 @@ def test_grounded_analysis_triage_points_are_full_lines() -> None:
     evidence = [
         {
             "source": "attachment",
+            "reference": "att-1",
             "summary": "Error Code: 502 Error Message: Underwriting decision pending Request ID: REQ-763579 Policy ID: TERM-627395 Endpoint: GET /api/v1/life/underwriting Response Time: 8766 ms",
         },
         {
@@ -44,16 +45,26 @@ def test_grounded_analysis_triage_points_are_full_lines() -> None:
                 "row_count": 5,
             }
         ],
+        attachment_evidence_list=evidence,
     )
 
     triage_points = grounded["triage_points"]
     assert any(point.startswith("Request IDs observed:") for point in triage_points)
     assert all(len(point.strip()) > 2 for point in triage_points)
     assert "R" not in triage_points
-    assert "Case-by-case log analysis:" in grounded["possible_rca"]
-    assert "underwriting-failure.png" in grounded["possible_rca"]
-    assert "Observed error messages:" in grounded["possible_rca"]
-    assert "Recommended remediation:" in grounded["possible_rca"]
-    assert "Service RCA:" in grounded["possible_rca"]
-    assert "Quotes RCA:" in grounded["possible_rca"]
-    assert "Policies RCA:" in grounded["possible_rca"]
+
+    rca = grounded["possible_rca"]
+    assert "Case-by-case log analysis:" in rca
+    assert "underwriting-failure.png" in rca
+    assert "Request ID: REQ-763579" in rca
+    assert "Error Message: Underwriting decision pending" in rca
+    assert "Recommended remediation:" in rca
+    assert "Conclusion:" in rca
+    # Service/Quotes/Policies RCA labels must NOT be in work note RCA
+    assert "Service RCA:" not in rca
+    assert "Quotes RCA:" not in rca
+    assert "Policies RCA:" not in rca
+    # They should be in llm_rca_hints only
+    assert "service_rca" in grounded["llm_rca_hints"]
+    assert "quotes_rca" in grounded["llm_rca_hints"]
+    assert "policies_rca" in grounded["llm_rca_hints"]
