@@ -94,5 +94,5 @@ def index_rag_record(record: dict[str, Any], embedding: list[float]) -> None:
     opensearch_client().index(
         index=os.getenv("OPENSEARCH_INDEX_NAME", "incidents-v1"),
         body=document,
-        refresh=False,
+        refresh=True,
     )

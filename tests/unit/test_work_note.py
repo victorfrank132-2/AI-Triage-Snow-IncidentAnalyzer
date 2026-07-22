@@ -19,11 +19,11 @@ def test_work_note_uses_evidence_and_not_hidden_reasoning() -> None:
         }
     )
     note = result["work_note_markdown"]
-    assert "Summary:" in note
-    assert "Triage Points:" in note
-    assert "Possible RCA:" in note
+    assert "Summary\n=======" in note
+    assert "Triage Points\n=============" in note
+    assert "Possible RCA\n============" in note
     assert "Evidence metrics (Images/Splunk Query):" not in note
-    assert "**AI analysis can be wrong and should only be considered for triage assistance.**" in note
+    assert "AI analysis can be wrong and should only be considered for triage assistance." in note
     assert "Short AI response disclaimer:" not in note
     assert "Five matching timeout events." in note
     assert "REQ-763579" in note

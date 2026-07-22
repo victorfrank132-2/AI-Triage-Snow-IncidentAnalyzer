@@ -15,7 +15,7 @@ def test_build_query_uses_expected_index_pattern_and_identifiers(monkeypatch) ->
         "INC0010105 REQ-763579 TERM-627395 ERR_502 "
         "GET /api/v1/life/underwriting GET /api/v1/quotes/premium"
     )
-    query = splunk_main._build_query(extracted)
+    query = splunk_main._build_query(extracted, limit=20)
 
     assert "index=life_api_logs OR index=life_ui_logs OR index=pc_api_logs OR index=pc_ui_logs" in query
     assert '"INC0010105"' not in query
@@ -25,6 +25,7 @@ def test_build_query_uses_expected_index_pattern_and_identifiers(monkeypatch) ->
     assert '"GET /api/v1/life/underwriting"' in query
     assert '"/api/v1/life/underwriting"' in query
     assert '"/api/v1/quotes/premium"' in query
+    assert "| head 20" in query
 
 
 def test_build_attachment_case_queries_uses_each_attachment_summary(monkeypatch) -> None:
@@ -42,9 +43,13 @@ def test_build_attachment_case_queries_uses_each_attachment_summary(monkeypatch)
         },
     ]
 
-    cases = splunk_main._build_attachment_case_queries(evidence, "", "")
+    cases = splunk_main._build_attachment_case_queries(evidence, "", "", 20)
     assert len(cases) == 2
     assert cases[0]["attachment_reference"] == "att-1"
     assert "REQ-763579" in cases[0]["query"]
     assert cases[1]["attachment_reference"] == "att-2"
     assert "REQ-889452" in cases[1]["query"]
+
+
+def test_extract_requested_log_limit_parses_last_n_logs() -> None:
+    assert splunk_main._extract_requested_log_limit("get last 20 logs", "") == 20

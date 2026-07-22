@@ -48,8 +48,12 @@ def _triage_points(evidence: list[dict[str, Any]]) -> str:
     return "\n".join(f"- {point}" for point in points)
 
 
+def _section(title: str, body: str) -> str:
+    underline = "=" * len(title)
+    return f"{title}\n{underline}\n{body.strip()}"
+
+
 def _compose_note(state: ReasoningState) -> ReasoningState:
-    evidence = state.get("evidence", [])
     recommendation = _normalize_summary(state.get("recommendation", ""), max_length=2500)
     triage_input = state.get("triage_points", [])
     if isinstance(triage_input, str):
@@ -69,18 +73,19 @@ def _compose_note(state: ReasoningState) -> ReasoningState:
     triage_block = (
         "\n".join(f"- {point}" for point in llm_triage_points)
         if llm_triage_points
-        else _triage_points(evidence)
+        else _triage_points(state.get("evidence", []))
     )
+    sections = [
+        _section("Summary", recommendation),
+        _section("Triage Points", triage_block),
+        _section(
+            "Possible RCA",
+            possible_rca or "RCA is not yet confirmed; continue operator validation.",
+        ),
+        "AI analysis can be wrong and should only be considered for triage assistance.",
+    ]
     return {
-        "work_note_markdown": (
-            "Summary:\n"
-            f"{recommendation}\n\n"
-            "Triage Points:\n"
-            f"{triage_block}\n\n"
-            "Possible RCA:\n"
-            f"{possible_rca or 'RCA is not yet confirmed; continue operator validation.'}\n\n"
-            "**AI analysis can be wrong and should only be considered for triage assistance.**"
-        )
+        "work_note_markdown": "\n\n".join(sections)
     }
 
 

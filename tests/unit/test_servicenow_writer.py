@@ -50,6 +50,8 @@ def test_process_posts_work_note_then_evidence_attachment(monkeypatch) -> None:
                 "earliest_hours_ago": 0,
                 "max_rows": 50,
             },
+            "results": [{"_raw": "sample log 1"}, {"_raw": "sample log 2"}],
+            "attachment_case_results": [{"attachment_reference": "att-1", "results": [{"_raw": "case log"}]}],
             "evidence": [
                 {
                     "source": "splunk",
@@ -89,6 +91,8 @@ def test_process_posts_work_note_then_evidence_attachment(monkeypatch) -> None:
             assert "work-note.md" in names
             assert "llm-inference.json" in names
             assert "splunk-stage.json" in names
+            assert "splunk-results.json" in names
+            assert "splunk-case-results.json" in names
             assert "evidence-references-INC0010104.txt" in names
             assert "Five matching timeout events." in archive.read(
                 "evidence-references-INC0010104.txt"

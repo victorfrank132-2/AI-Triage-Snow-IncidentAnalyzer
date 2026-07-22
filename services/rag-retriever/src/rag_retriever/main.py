@@ -8,6 +8,7 @@ from snow_intelligence.rag import embed_text, search_similar_cases
 from snow_intelligence.routing import choose_route
 from snow_intelligence.runtime import TaskContext, run_task
 from snow_intelligence.schemas import RagCandidate, ServiceNowIncidentPayload
+from snow_intelligence.stages import load_stage
 
 
 def _mock_candidates(incident: ServiceNowIncidentPayload) -> list[RagCandidate]:
@@ -32,7 +33,30 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
     if context.mock_mode:
         candidates = _mock_candidates(incident)
     else:
-        query_text = f"{incident.short_description}\n{incident.description or ''}"
+        try:
+            context_stage = load_stage(context, "context")
+        except Exception:
+            context_stage = {}
+        try:
+            attachment_stage = load_stage(context, "attachments")
+        except Exception:
+            attachment_stage = {}
+
+        attachment_summaries = "\n".join(
+            str(item.get("summary", ""))
+            for item in attachment_stage.get("evidence", [])
+            if str(item.get("source", "")).lower() == "attachment"
+        )
+        query_text = "\n".join(
+            part
+            for part in [
+                incident.short_description,
+                incident.description or "",
+                str(context_stage.get("incident_summary", "")),
+                attachment_summaries,
+            ]
+            if part
+        )
         embedding, token_count = embed_text(query_text)
         candidates = [
             RagCandidate(

@@ -119,6 +119,62 @@ def _summary_row_count(summary: str) -> int | None:
     return int(match.group(1))
 
 
+def _extract_export_rows(response_text: str) -> list[dict[str, Any]]:
+    text = response_text.strip()
+    if not text:
+        return []
+
+    def _as_dict_rows(payload: Any) -> list[dict[str, Any]]:
+        if isinstance(payload, dict):
+            rows = payload.get("rows")
+            fields = payload.get("fields") or []
+            if isinstance(rows, list):
+                if fields and all(isinstance(item, list) for item in rows):
+                    return [
+                        {str(fields[index]): value for index, value in enumerate(row) if index < len(fields)}
+                        for row in rows
+                    ]
+                return [row for row in rows if isinstance(row, dict)]
+            if isinstance(payload.get("result"), dict):
+                return [payload["result"]]
+        if isinstance(payload, list):
+            return [row for row in payload if isinstance(row, dict)]
+        return []
+
+    try:
+        parsed = json.loads(text)
+        rows = _as_dict_rows(parsed)
+        if rows:
+            return rows
+    except json.JSONDecodeError:
+        pass
+
+    rows: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        parsed_rows = _as_dict_rows(payload)
+        if parsed_rows:
+            rows.extend(parsed_rows)
+        elif isinstance(payload, dict):
+            rows.append(payload)
+    return rows
+
+
+def _extract_requested_log_limit(short_description: str, description: str) -> int:
+    text = f"{short_description} {description}"
+    match = re.search(r"\blast\s+(\d{1,4})\s+logs?\b", text, flags=re.IGNORECASE)
+    if not match:
+        return 50
+    requested = int(match.group(1))
+    return max(1, min(requested, 1000))
+
+
 def _extract_context_terms(context_summary: str) -> list[str]:
     text = str(context_summary or "")
     terms: list[str] = []
@@ -167,7 +223,9 @@ def _fallback_terms(short_description: str, description: str) -> list[str]:
     return terms
 
 
-def _build_query(identifier_terms: list[str], short_description: str = "", description: str = "") -> str:
+def _build_query(
+    identifier_terms: list[str], short_description: str = "", description: str = "", limit: int = 50
+) -> str:
     indexes = _query_indexes()
     index_clause = " OR ".join(f"index={index_name}" for index_name in indexes)
 
@@ -185,11 +243,11 @@ def _build_query(identifier_terms: list[str], short_description: str = "", descr
         filtered_identifiers = _fallback_terms(short_description, description)
 
     identifiers_clause = " OR ".join(f'"{term}"' for term in filtered_identifiers[:20])
-    return f"{index_clause} ({identifiers_clause}) | head 50"
+    return f"{index_clause} ({identifiers_clause}) | head {limit}"
 
 
 def _build_attachment_case_queries(
-    attachment_evidence: list[dict[str, Any]], short_description: str, description: str
+    attachment_evidence: list[dict[str, Any]], short_description: str, description: str, limit: int
 ) -> list[dict[str, Any]]:
     cases: list[dict[str, Any]] = []
     for item in attachment_evidence:
@@ -205,7 +263,12 @@ def _build_attachment_case_queries(
                 "attachment_reference": attachment_ref,
                 "attachment_name": attachment_name,
                 "identifiers": identifiers[:12],
-                "query": _build_query(identifiers, short_description=short_description, description=description),
+                "query": _build_query(
+                    identifiers,
+                    short_description=short_description,
+                    description=description,
+                    limit=limit,
+                ),
             }
         )
     return cases
@@ -235,7 +298,7 @@ def _web_proxy_login(session: requests.Session, base_url: str, username: str, pa
     return csrf_token
 
 
-def _execute_query_web_proxy(base_url: str, request: SplunkQueryRequest) -> tuple[str, str]:
+def _execute_query_web_proxy(base_url: str, request: SplunkQueryRequest) -> tuple[str, str, list[dict[str, Any]]]:
     username = os.environ["SPLUNK_USERNAME"]
     password = os.environ["SPLUNK_PASSWORD"]
     session = requests.Session()
@@ -259,11 +322,12 @@ def _execute_query_web_proxy(base_url: str, request: SplunkQueryRequest) -> tupl
         timeout=(5, 40),
     )
     response.raise_for_status()
-    row_count = _count_export_rows(response.text)
-    return "web-proxy-export", f"Splunk returned {row_count} guardrailed evidence rows."
+    rows = _extract_export_rows(response.text)
+    row_count = len(rows) or _count_export_rows(response.text)
+    return "web-proxy-export", f"Splunk returned {row_count} guardrailed evidence rows.", rows
 
 
-def _execute_query(request: SplunkQueryRequest) -> tuple[str, str]:
+def _execute_query(request: SplunkQueryRequest) -> tuple[str, str, list[dict[str, Any]]]:
     base_url = _normalize_base_url(os.environ["SPLUNK_BASE_URL"])
     auth = (os.environ["SPLUNK_USERNAME"], os.environ["SPLUNK_PASSWORD"])
     access_mode = os.getenv("SPLUNK_ACCESS_MODE", "web_proxy").strip().lower()
@@ -291,7 +355,7 @@ def _execute_query(request: SplunkQueryRequest) -> tuple[str, str]:
             results = requests.get(f"{base_url}/services/search/jobs/{search_id}/results", params={"output_mode": "json", "count": request.max_rows}, auth=auth, timeout=(5, 20))
             results.raise_for_status()
             rows = results.json().get("results", [])
-            return search_id, f"Splunk returned {len(rows)} guardrailed evidence rows."
+            return search_id, f"Splunk returned {len(rows)} guardrailed evidence rows.", rows
         time.sleep(2)
     raise TimeoutError("Splunk search did not complete within the allowed polling window")
 
@@ -300,6 +364,10 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
     context_stage = load_stage(context, "context")
     attachment_stage = load_stage(context, "attachments")
     incident_number = payload["incident"]["incident_number"]
+    requested_log_limit = _extract_requested_log_limit(
+        str(payload["incident"].get("short_description", "")),
+        str(payload["incident"].get("description", "")),
+    )
 
     attachment_name_by_ref = {
         str(item.get("sys_id", "")): str(item.get("file_name", ""))
@@ -329,27 +397,33 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
         identifier_terms,
         short_description=str(payload["incident"].get("short_description", "")),
         description=str(payload["incident"].get("description", "")),
+        limit=requested_log_limit,
     )
     request = SplunkQueryRequest(
         query=query,
         earliest_hours_ago=0,
-        max_rows=50,
+        max_rows=requested_log_limit,
     )
     validate_splunk_query(request, _policy())
-    search_id, summary = ("mock-search-job", "Mock Splunk evidence completed.") if context.mock_mode else _execute_query(request)
+    search_id, summary, result_rows = (
+        ("mock-search-job", "Mock Splunk evidence completed.", [])
+        if context.mock_mode
+        else _execute_query(request)
+    )
 
     attachment_cases = _build_attachment_case_queries(
         attachment_stage.get("evidence", []),
         short_description=str(payload["incident"].get("short_description", "")),
         description=str(payload["incident"].get("description", "")),
+        limit=requested_log_limit,
     )
     max_case_queries = int(os.getenv("SPLUNK_ATTACHMENT_CASE_MAX", "5"))
     case_results: list[dict[str, Any]] = []
     for case in attachment_cases[:max_case_queries]:
-        case_request = SplunkQueryRequest(query=case["query"], earliest_hours_ago=0, max_rows=30)
+        case_request = SplunkQueryRequest(query=case["query"], earliest_hours_ago=0, max_rows=requested_log_limit)
         validate_splunk_query(case_request, _policy())
-        case_search_id, case_summary = (
-            (f"mock-case-{case['attachment_reference']}", "Mock Splunk evidence completed.")
+        case_search_id, case_summary, case_rows = (
+            (f"mock-case-{case['attachment_reference']}", "Mock Splunk evidence completed.", [])
             if context.mock_mode
             else _execute_query(case_request)
         )
@@ -362,6 +436,7 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
                 "search_reference": case_search_id,
                 "summary": case_summary,
                 "row_count": _summary_row_count(case_summary),
+                "results": case_rows,
             }
         )
 
@@ -379,6 +454,7 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "query": request.model_dump(),
         "evidence": [evidence.model_dump()],
+        "results": result_rows,
         "attachment_case_results": case_results,
     }
 

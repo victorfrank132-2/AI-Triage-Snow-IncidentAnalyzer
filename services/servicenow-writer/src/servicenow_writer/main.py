@@ -49,6 +49,14 @@ def _build_analysis_bundle(
         archive.writestr("work-note.md", note.work_note_markdown)
         archive.writestr(evidence_file_name, evidence_text)
         archive.writestr("splunk-stage.json", json.dumps(splunk_stage, indent=2, ensure_ascii=True))
+        archive.writestr(
+            "splunk-results.json",
+            json.dumps(splunk_stage.get("results", []), indent=2, ensure_ascii=True),
+        )
+        archive.writestr(
+            "splunk-case-results.json",
+            json.dumps(splunk_stage.get("attachment_case_results", []), indent=2, ensure_ascii=True),
+        )
         archive.writestr("llm-inference.json", json.dumps(llm_inference, indent=2, ensure_ascii=True))
     return zip_name, buffer.getvalue()
 
