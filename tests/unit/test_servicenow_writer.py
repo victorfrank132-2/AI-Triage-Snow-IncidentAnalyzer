@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sys
+import zipfile
+from io import BytesIO
 from pathlib import Path
 
 from snow_intelligence.runtime import TaskContext
@@ -29,12 +31,34 @@ def test_process_posts_work_note_then_evidence_attachment(monkeypatch) -> None:
         ],
     )
 
-    stage_payload = note.model_dump(mode="json")
+    stage_payload = {
+        "work_note": note.model_dump(mode="json"),
+        "llm_inference": {
+            "route": "full",
+            "structured_analysis": {"possible_rca": "Upstream timeout in pricing service."},
+        },
+    }
     calls: list[str] = []
 
     def fake_load_stage(context: TaskContext, stage: str) -> dict[str, object]:
-        assert stage == "reasoning"
-        return stage_payload
+        if stage == "reasoning":
+            return stage_payload
+        assert stage == "splunk"
+        return {
+            "query": {
+                "query": "index=life_api_logs (\"REQ-123\") | head 50",
+                "earliest_hours_ago": 0,
+                "max_rows": 50,
+            },
+            "evidence": [
+                {
+                    "source": "splunk",
+                    "reference": "web-proxy-export",
+                    "summary": "Splunk returned 5 rows",
+                    "confidence": 0.9,
+                }
+            ],
+        }
 
     def fake_write_to_servicenow(note_value: WorkNote) -> dict[str, object]:
         calls.append("write")
@@ -47,15 +71,28 @@ def test_process_posts_work_note_then_evidence_attachment(monkeypatch) -> None:
         }
 
     def fake_attach_evidence_file(
-        base_url: str, incident_sys_id: str, note_value: WorkNote
+        base_url: str,
+        incident_sys_id: str,
+        note_value: WorkNote,
+        splunk_stage: dict[str, object],
+        llm_inference: dict[str, object],
     ) -> dict[str, object]:
         calls.append("attach")
         assert base_url == "https://example.service-now.com"
         assert incident_sys_id == "sys-123"
-        file_name, attachment_text = writer._build_evidence_attachment(note_value)
-        assert file_name == "evidence-references-INC0010104.txt"
-        assert "Evidence references: &splunk results & formedquery" in attachment_text
-        assert "Five matching timeout events." in attachment_text
+        file_name, bundle_bytes = writer._build_analysis_bundle(
+            note_value, splunk_stage, llm_inference
+        )
+        assert file_name == "analysis-bundle-INC0010104.zip"
+        with zipfile.ZipFile(BytesIO(bundle_bytes), mode="r") as archive:
+            names = set(archive.namelist())
+            assert "work-note.md" in names
+            assert "llm-inference.json" in names
+            assert "splunk-stage.json" in names
+            assert "evidence-references-INC0010104.txt" in names
+            assert "Five matching timeout events." in archive.read(
+                "evidence-references-INC0010104.txt"
+            ).decode("utf-8")
         return {
             "status_code": 201,
             "target": "mock://servicenow/attachment/file",
@@ -84,4 +121,5 @@ def test_process_posts_work_note_then_evidence_attachment(monkeypatch) -> None:
 
     assert calls == ["write", "attach"]
     assert result["writeback_receipt"]["incident_sys_id"] == "sys-123"
-    assert result["evidence_attachment_receipt"]["file_name"] == "evidence-references-INC0010104.txt"
+    assert result["evidence_attachment_receipt"]["file_name"] == "analysis-bundle-INC0010104.zip"
+    assert result["analysis_bundle_receipt"]["file_name"] == "analysis-bundle-INC0010104.zip"

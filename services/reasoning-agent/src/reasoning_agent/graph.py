@@ -13,11 +13,14 @@ class ReasoningState(TypedDict, total=False):
     confidence: float
     recommendation: str
     rationale_summary: str
+    triage_points: list[str]
+    possible_rca: str
+    splunk_query: str
     evidence: list[dict[str, Any]]
     work_note_markdown: str
 
 
-def _normalize_summary(value: Any, max_length: int = 220) -> str:
+def _normalize_summary(value: Any, max_length: int = 1200) -> str:
     text = " ".join(str(value or "").split())
     if len(text) <= max_length:
         return text
@@ -27,17 +30,17 @@ def _normalize_summary(value: Any, max_length: int = 220) -> str:
 def _triage_points(evidence: list[dict[str, Any]]) -> str:
     points: list[str] = []
     for item in evidence:
-        summary = _normalize_summary(item.get("summary", ""))
+        summary = _normalize_summary(item.get("summary", ""), max_length=900)
         if summary and summary not in points:
             points.append(summary)
-        if len(points) >= 4:
+        if len(points) >= 6:
             break
     if not points:
         return "- No high-confidence triage signal was extracted."
     return "\n".join(f"- {point}" for point in points)
 
 
-def _evidence_metrics(evidence: list[dict[str, Any]]) -> str:
+def _evidence_metrics(evidence: list[dict[str, Any]], splunk_query: str = "") -> str:
     splunk_refs: list[str] = []
     image_refs: list[str] = []
 
@@ -52,7 +55,9 @@ def _evidence_metrics(evidence: list[dict[str, Any]]) -> str:
             image_refs.append(metric)
 
     lines: list[str] = []
-    if splunk_refs:
+    if splunk_query.strip():
+        lines.append(f"- Splunk Query: {splunk_query.strip()}")
+    elif splunk_refs:
         lines.append(f"- Splunk Query: {splunk_refs[0]}")
     else:
         lines.append("- Splunk Query: Not available.")
@@ -67,18 +72,30 @@ def _evidence_metrics(evidence: list[dict[str, Any]]) -> str:
 
 def _compose_note(state: ReasoningState) -> ReasoningState:
     evidence = state.get("evidence", [])
-    recommendation = _normalize_summary(state.get("recommendation", ""), max_length=700)
-    possible_rca = _normalize_summary(state.get("rationale_summary", ""), max_length=700)
+    recommendation = _normalize_summary(state.get("recommendation", ""), max_length=2500)
+    llm_triage_points = [
+        _normalize_summary(item, max_length=900)
+        for item in state.get("triage_points", [])
+        if str(item or "").strip()
+    ]
+    possible_rca = _normalize_summary(
+        state.get("possible_rca", state.get("rationale_summary", "")), max_length=2500
+    )
+    triage_block = (
+        "\n".join(f"- {point}" for point in llm_triage_points)
+        if llm_triage_points
+        else _triage_points(evidence)
+    )
     return {
         "work_note_markdown": (
             "Summary:\n"
             f"{recommendation}\n\n"
             "Triage Points:\n"
-            f"{_triage_points(evidence)}\n\n"
+            f"{triage_block}\n\n"
             "Possible RCA:\n"
             f"{possible_rca or 'RCA is not yet confirmed; continue operator validation.'}\n\n"
             "Evidence metrics (Images/Splunk Query):\n"
-            f"{_evidence_metrics(evidence)}\n\n"
+            f"{_evidence_metrics(evidence, splunk_query=str(state.get('splunk_query', '')))}\n\n"
             "Short AI response disclaimer:\n"
             "AI-generated operational summary. Validate against logs, telemetry, and runbooks before closure."
         )

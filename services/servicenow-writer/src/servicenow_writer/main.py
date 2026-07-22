@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import io
+import json
 import os
+import zipfile
 from typing import Any
 
 import requests
@@ -34,6 +37,20 @@ def _build_evidence_attachment(note: WorkNote) -> tuple[str, str]:
         lines.append("- none")
     lines.append("")
     return file_name, "\n".join(lines)
+
+
+def _build_analysis_bundle(
+    note: WorkNote, splunk_stage: dict[str, Any], llm_inference: dict[str, Any]
+) -> tuple[str, bytes]:
+    zip_name = f"analysis-bundle-{note.incident_number}.zip"
+    evidence_file_name, evidence_text = _build_evidence_attachment(note)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("work-note.md", note.work_note_markdown)
+        archive.writestr(evidence_file_name, evidence_text)
+        archive.writestr("splunk-stage.json", json.dumps(splunk_stage, indent=2, ensure_ascii=True))
+        archive.writestr("llm-inference.json", json.dumps(llm_inference, indent=2, ensure_ascii=True))
+    return zip_name, buffer.getvalue()
 
 
 def _resolve_incident_sys_id(base_url: str, incident_number: str) -> str:
@@ -82,9 +99,15 @@ def _write_to_servicenow(note: WorkNote) -> dict[str, Any]:
     }
 
 
-def _attach_evidence_file(base_url: str, incident_sys_id: str, note: WorkNote) -> dict[str, Any]:
+def _attach_evidence_file(
+    base_url: str,
+    incident_sys_id: str,
+    note: WorkNote,
+    splunk_stage: dict[str, Any],
+    llm_inference: dict[str, Any],
+) -> dict[str, Any]:
     base_url = base_url.rstrip("/")
-    file_name, attachment_text = _build_evidence_attachment(note)
+    file_name, bundle_bytes = _build_analysis_bundle(note, splunk_stage, llm_inference)
     response = requests.post(
         f"{base_url}/api/now/attachment/file",
         params={
@@ -92,7 +115,7 @@ def _attach_evidence_file(base_url: str, incident_sys_id: str, note: WorkNote) -
             "table_sys_id": incident_sys_id,
             "file_name": file_name,
         },
-        files={"file": (file_name, attachment_text.encode("utf-8"), "text/plain")},
+        files={"file": (file_name, bundle_bytes, "application/zip")},
         auth=(os.environ["SERVICENOW_USERNAME"], os.environ["SERVICENOW_PASSWORD"]),
         headers={"Accept": "application/json"},
         timeout=(5, 30),
@@ -109,23 +132,33 @@ def _attach_evidence_file(base_url: str, incident_sys_id: str, note: WorkNote) -
 
 
 def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
-    note = WorkNote.model_validate(load_stage(context, "reasoning"))
+    reasoning_stage = load_stage(context, "reasoning")
+    note_payload = reasoning_stage.get("work_note", reasoning_stage)
+    note = WorkNote.model_validate(note_payload)
+    llm_inference = reasoning_stage.get("llm_inference", {})
+    splunk_stage = load_stage(context, "splunk")
     if context.mock_mode:
         receipt = {"status_code": 200, "target": "mock://servicenow/work-notes", "mock": True}
+        bundle_name, _ = _build_analysis_bundle(note, splunk_stage, llm_inference)
         attachment_receipt = {
             "status_code": 200,
             "target": "mock://servicenow/attachment/file",
-            "file_name": _build_evidence_attachment(note)[0],
+            "file_name": bundle_name,
             "mock": True,
         }
     else:
         receipt = _write_to_servicenow(note)
         attachment_receipt = _attach_evidence_file(
-            os.environ["SERVICENOW_INSTANCE_URL"], receipt["incident_sys_id"], note
+            os.environ["SERVICENOW_INSTANCE_URL"],
+            receipt["incident_sys_id"],
+            note,
+            splunk_stage,
+            llm_inference,
         )
     return {
         "work_note": note.model_dump(mode="json"),
         "writeback_receipt": receipt,
+        "analysis_bundle_receipt": attachment_receipt,
         "evidence_attachment_receipt": attachment_receipt,
     }
 
