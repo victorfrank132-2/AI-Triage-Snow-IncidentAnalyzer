@@ -13,3 +13,14 @@ node_modules/
 coverage.xml
 htmlcov/
 *.egg-info/
+
+# Local deployment/test artifacts
+codebuild-src-*.zip
+debug.log
+tmp-codebuild-*.json
+.vscode/
+
+# Local incident replay payload scratch files
+infrastructure/bedrock_*.json
+infrastructure/payload_*.json
+infrastructure/sfn_*_input.json

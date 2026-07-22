@@ -23,6 +23,12 @@ cdk diff --all
 cdk deploy --all --require-approval broadening
 ```
 
+Optional local helper (packages source, uploads to S3, and starts CodeBuild deploy pipeline):
+
+```powershell
+python scripts/deploy_local.py
+```
+
 For a development mock deployment, leave `mock_mode=true`, `mtls_enabled=false`, and `cost_optimized_dev=true` in `infrastructure/cdk.json`. This avoids idle NAT Gateway and interface endpoint charges. For production, pass `-c mock_mode=false -c mtls_enabled=true -c cost_optimized_dev=false` and supply the CloudFormation parameters for the approved Bedrock model and mTLS domain, certificate, and truststore.
 
 ## Post-deploy verification

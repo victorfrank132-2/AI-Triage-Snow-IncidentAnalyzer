@@ -19,3 +19,15 @@
 2. Reduce concurrency or output bounds first; then request an approved quota increase or use a validated inference profile.
 3. Do not retry validation or access-denied failures.
 
+## Log retrieval incident behavior
+
+1. Incidents that match log-retrieval intent (for example, "get last N logs") intentionally skip full triage synthesis.
+2. Work note contains an operational retrieval summary and points responders to attached artifacts.
+3. Attached bundle includes `splunk-results.json`, `splunk-case-results.json`, and `splunk-stage.json` for auditability.
+
+## ServiceNow journal formatting behavior
+
+1. Work notes are emitted in `[code]...[/code]` blocks so HTML renders inside journal fields.
+2. Headings use `<h3>`, bullet lists use `<ul><li>`, and disclaimer emphasis uses `<blockquote><strong>`.
+3. If rendering regresses after a ServiceNow UI upgrade, validate with a minimal journal test post before changing production formatting.
+
