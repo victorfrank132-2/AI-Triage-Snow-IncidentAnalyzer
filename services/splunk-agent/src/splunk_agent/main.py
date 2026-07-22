@@ -116,9 +116,11 @@ def _extract_context_terms(context_summary: str) -> list[str]:
     text = str(context_summary or "")
     terms: list[str] = []
     patterns = [
-        r"\bREQ-\d+\b",
-        r"\bTERM-\d+\b",
+        r"\bREQ-[A-Za-z0-9-]+\b",
+        r"\bTERM-[A-Za-z0-9-]+\b",
         r"\bQ-[A-Za-z0-9-]+\b",
+        r"\bERR_[A-Za-z0-9_]+\b",
+        r"\b(?:GET|POST|PUT|DELETE|PATCH)\s+/api/[A-Za-z0-9/_-]+\b",
         r"\b(?:GET|POST|PUT|DELETE|PATCH)\s+(/api/[A-Za-z0-9/_-]+)",
         r"\b(/api/[A-Za-z0-9/_-]+)",
     ]
@@ -131,16 +133,51 @@ def _extract_context_terms(context_summary: str) -> list[str]:
     return terms
 
 
-def _build_query(incident_number: str, context_summary: str) -> str:
+def _fallback_terms(short_description: str, description: str) -> list[str]:
+    text = f"{short_description} {description}"
+    keywords = re.findall(r"\b[a-zA-Z][a-zA-Z0-9_-]{3,}\b", text.lower())
+    stopwords = {
+        "incident",
+        "analysis",
+        "provide",
+        "given",
+        "from",
+        "with",
+        "that",
+        "this",
+        "need",
+        "needs",
+        "errors",
+    }
+    terms: list[str] = []
+    for keyword in keywords:
+        if keyword in stopwords:
+            continue
+        if keyword not in terms:
+            terms.append(keyword)
+        if len(terms) >= 6:
+            break
+    return terms
+
+
+def _build_query(identifier_terms: list[str], short_description: str = "", description: str = "") -> str:
     indexes = _query_indexes()
     index_clause = " OR ".join(f"index={index_name}" for index_name in indexes)
 
-    identifier_terms = [incident_number]
-    for term in _extract_context_terms(context_summary):
-        if term not in identifier_terms:
-            identifier_terms.append(term)
+    filtered_identifiers: list[str] = []
+    for term in identifier_terms:
+        normalized = str(term or "").strip()
+        if not normalized:
+            continue
+        if normalized.lower().startswith("inc") and normalized[3:].isdigit():
+            continue
+        if normalized not in filtered_identifiers:
+            filtered_identifiers.append(normalized)
 
-    identifiers_clause = " OR ".join(f'"{term}"' for term in identifier_terms[:8])
+    if not filtered_identifiers:
+        filtered_identifiers = _fallback_terms(short_description, description)
+
+    identifiers_clause = " OR ".join(f'"{term}"' for term in filtered_identifiers[:20])
     return f"{index_clause} ({identifiers_clause}) | head 50"
 
 
@@ -231,8 +268,26 @@ def _execute_query(request: SplunkQueryRequest) -> tuple[str, str]:
 
 def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
     context_stage = load_stage(context, "context")
+    attachment_stage = load_stage(context, "attachments")
     incident_number = payload["incident"]["incident_number"]
-    query = _build_query(incident_number, context_stage.get("incident_summary", ""))
+
+    attachment_text = "\n".join(
+        str(item.get("summary", "")) for item in attachment_stage.get("evidence", [])
+    )
+    context_text = "\n".join(
+        [
+            str(context_stage.get("incident_summary", "")),
+            str(payload["incident"].get("short_description", "")),
+            str(payload["incident"].get("description", "")),
+            attachment_text,
+        ]
+    )
+    identifier_terms = _extract_context_terms(context_text)
+    query = _build_query(
+        identifier_terms,
+        short_description=str(payload["incident"].get("short_description", "")),
+        description=str(payload["incident"].get("description", "")),
+    )
     request = SplunkQueryRequest(
         query=query,
         earliest_hours_ago=0,
