@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from html import escape
 from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -48,8 +49,43 @@ def _triage_points(evidence: list[dict[str, Any]]) -> str:
     return "\n".join(f"- {point}" for point in points)
 
 
+def _render_html_lines(body: str) -> str:
+    lines = [line.rstrip() for line in str(body or "").splitlines()]
+    parts: list[str] = []
+    in_list = False
+
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            if in_list:
+                parts.append("</ul>")
+                in_list = False
+            continue
+
+        if line.startswith("- "):
+            if not in_list:
+                parts.append("<ul>")
+                in_list = True
+            parts.append(f"<li>{escape(line[2:])}</li>")
+            continue
+
+        if in_list:
+            parts.append("</ul>")
+            in_list = False
+
+        if line.lower().startswith("attachment:") or line.endswith(":"):
+            parts.append(f"<p><strong>{escape(line)}</strong></p>")
+        else:
+            parts.append(f"<p>{escape(line)}</p>")
+
+    if in_list:
+        parts.append("</ul>")
+
+    return "".join(parts)
+
+
 def _section(title: str, body: str) -> str:
-    return f"{title}\n{body.strip()}"
+    return f"<h3>{escape(title)}</h3>{_render_html_lines(body)}"
 
 
 def _compose_note(state: ReasoningState) -> ReasoningState:
@@ -81,13 +117,13 @@ def _compose_note(state: ReasoningState) -> ReasoningState:
             "Possible RCA",
             possible_rca or "RCA is not yet confirmed; continue operator validation.",
         ),
-        _section(
-            "Disclaimer",
-            "AI analysis can be wrong and should only be considered for triage assistance.",
+        (
+            "<h3>Disclaimer</h3>"
+            "<blockquote><strong>AI analysis can be wrong and should only be considered for triage assistance.</strong></blockquote>"
         ),
     ]
     return {
-        "work_note_markdown": "\n\n".join(sections)
+        "work_note_markdown": "[code]" + "".join(sections) + "[/code]"
     }
 
 
