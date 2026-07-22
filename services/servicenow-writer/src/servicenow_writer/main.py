@@ -115,9 +115,9 @@ def _attach_evidence_file(
             "table_sys_id": incident_sys_id,
             "file_name": file_name,
         },
-        files={"file": (file_name, bundle_bytes, "application/zip")},
+        data=bundle_bytes,
         auth=(os.environ["SERVICENOW_USERNAME"], os.environ["SERVICENOW_PASSWORD"]),
-        headers={"Accept": "application/json"},
+        headers={"Accept": "application/json", "Content-Type": "application/zip"},
         timeout=(5, 30),
     )
     response.raise_for_status()
