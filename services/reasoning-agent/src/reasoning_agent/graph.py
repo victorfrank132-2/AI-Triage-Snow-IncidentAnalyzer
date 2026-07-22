@@ -73,9 +73,16 @@ def _evidence_metrics(evidence: list[dict[str, Any]], splunk_query: str = "") ->
 def _compose_note(state: ReasoningState) -> ReasoningState:
     evidence = state.get("evidence", [])
     recommendation = _normalize_summary(state.get("recommendation", ""), max_length=2500)
+    triage_input = state.get("triage_points", [])
+    if isinstance(triage_input, str):
+        triage_candidates = [triage_input]
+    elif isinstance(triage_input, list):
+        triage_candidates = triage_input
+    else:
+        triage_candidates = []
     llm_triage_points = [
         _normalize_summary(item, max_length=900)
-        for item in state.get("triage_points", [])
+        for item in triage_candidates
         if str(item or "").strip()
     ]
     possible_rca = _normalize_summary(

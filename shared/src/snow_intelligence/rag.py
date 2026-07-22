@@ -59,7 +59,14 @@ def opensearch_client() -> OpenSearch:
     )
 
 
+def _retrieval_outcome_labels() -> list[str]:
+    configured = os.getenv("OPENSEARCH_RETRIEVAL_OUTCOME_LABELS", "accepted,unknown")
+    labels = [item.strip() for item in configured.split(",") if item.strip()]
+    return labels or ["accepted", "unknown"]
+
+
 def search_similar_cases(embedding: list[float], *, size: int = 5) -> list[dict[str, Any]]:
+    labels = _retrieval_outcome_labels()
     response = opensearch_client().search(
         index=os.getenv("OPENSEARCH_INDEX_NAME", "incidents-v1"),
         body={
@@ -73,7 +80,7 @@ def search_similar_cases(embedding: list[float], *, size: int = 5) -> list[dict[
             ],
             "query": {
                 "bool": {
-                    "filter": [{"term": {"outcome_label": "accepted"}}],
+                    "filter": [{"terms": {"outcome_label": labels}}],
                     "must": [{"knn": {"embedding": {"vector": embedding, "k": size}}}],
                 }
             },

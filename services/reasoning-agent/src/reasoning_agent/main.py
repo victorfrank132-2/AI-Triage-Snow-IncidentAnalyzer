@@ -191,9 +191,16 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
             max_tokens=1400,
         )
         structured_analysis = _extract_structured_analysis(llm_response)
+        llm_triage_raw = structured_analysis.get("triage_points", [])
+        if isinstance(llm_triage_raw, str):
+            llm_triage_iterable = [llm_triage_raw]
+        elif isinstance(llm_triage_raw, list):
+            llm_triage_iterable = llm_triage_raw
+        else:
+            llm_triage_iterable = []
         llm_triage_points = [
             str(item)
-            for item in structured_analysis.get("triage_points", [])
+            for item in llm_triage_iterable
             if str(item or "").strip()
         ]
         recommendation = grounded["recommendation"]
