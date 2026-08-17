@@ -8,7 +8,7 @@ from snow_intelligence.schemas import RouteDecision, RouteKind
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "services" / "reasoning-agent" / "src"))
 
-from reasoning_agent.main import _build_grounded_analysis, _is_log_retrieval_request
+from reasoning_agent.main import _build_grounded_analysis, _is_log_retrieval_request  # noqa: E402
 
 
 def test_grounded_analysis_triage_points_are_full_lines() -> None:
@@ -60,7 +60,8 @@ def test_grounded_analysis_triage_points_are_full_lines() -> None:
     assert "Request ID: REQ-763579" in rca
     assert "Error Message: Underwriting decision pending" in rca
     assert "Recommended remediation:" in rca
-    assert "Conclusion:" in rca
+    assert "Conclusion:" not in rca
+    assert "Confirm fix with a targeted replay" not in rca
     # Service/Quotes/Policies RCA labels must NOT be in work note RCA
     assert "Service RCA:" not in rca
     assert "Quotes RCA:" not in rca
@@ -110,6 +111,51 @@ def test_grounded_analysis_extracts_markdown_labeled_error_message() -> None:
 
     assert "Attachment: underwriting-failure (1).png" in grounded["possible_rca"]
     assert "Error Message: Upstream timeout at underwriting service" in grounded["possible_rca"]
+
+
+def test_grounded_analysis_preserves_beneficiary_verification_error() -> None:
+    route = RouteDecision(
+        route=RouteKind.REFINE,
+        confidence=0.82,
+        rationale_summary="A similar incident was found but requires lightweight evidence refinement.",
+    )
+    evidence = [
+        {
+            "source": "attachment",
+            "reference": "att-3",
+            "summary": 'API error was "Beneficiary verification failed" Request ID: REQ-9001 Endpoint: POST /api/v1/beneficiary/verify',
+        },
+        {
+            "source": "splunk",
+            "summary": "Splunk returned 12 guardrailed evidence rows.",
+        },
+    ]
+
+    grounded = _build_grounded_analysis(
+        incident={
+            "incident_number": "INC0010123",
+            "attachments": [{"sys_id": "att-3", "file_name": "beneficiary-error.png"}],
+        },
+        evidence=evidence,
+        splunk_query='index=life_api_logs ("REQ-9001") | head 50',
+        route=route,
+        attachment_case_results=[
+            {
+                "attachment_reference": "att-3",
+                "attachment_name": "beneficiary-error.png",
+                "identifiers": ["REQ-9001", "POST /api/v1/beneficiary/verify"],
+                "row_count": 12,
+            }
+        ],
+        attachment_evidence_list=evidence,
+    )
+
+    assert 'Observed API failure "Beneficiary verification failed"' in grounded["recommendation"]
+    assert "Error Message: Beneficiary verification failed" in grounded["possible_rca"]
+    assert "Update failed" not in grounded["recommendation"]
+    assert "Update failed" not in grounded["possible_rca"]
+    assert grounded["analysis_category"] == "api_error"
+    assert grounded["analysis_category_confidence"] >= 0.90
 
 
 def test_is_log_retrieval_request_detects_last_n_logs() -> None:

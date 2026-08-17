@@ -4,6 +4,7 @@ import sys
 import zipfile
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 
 from snow_intelligence.runtime import TaskContext
 from snow_intelligence.schemas import WorkNote
@@ -11,7 +12,19 @@ from snow_intelligence.schemas import WorkNote
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "services" / "servicenow-writer" / "src"))
 
-from servicenow_writer import main as writer
+from servicenow_writer import main as writer  # noqa: E402
+
+
+class _FakeResponse:
+    def __init__(self, status_code: int, payload: dict[str, Any]) -> None:
+        self.status_code = status_code
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, Any]:
+        return self._payload
 
 
 def test_process_posts_work_note_then_evidence_attachment(monkeypatch) -> None:
@@ -62,7 +75,9 @@ def test_process_posts_work_note_then_evidence_attachment(monkeypatch) -> None:
             ],
         }
 
-    def fake_write_to_servicenow(note_value: WorkNote) -> dict[str, object]:
+    def fake_write_to_servicenow(
+        note_value: WorkNote, incident: dict[str, object] | None = None, llm_inference: dict[str, object] | None = None
+    ) -> dict[str, object]:
         calls.append("write")
         assert note_value.incident_number == "INC0010104"
         return {
@@ -127,3 +142,153 @@ def test_process_posts_work_note_then_evidence_attachment(monkeypatch) -> None:
     assert result["writeback_receipt"]["incident_sys_id"] == "sys-123"
     assert result["evidence_attachment_receipt"]["file_name"] == "analysis-bundle-INC0010104.zip"
     assert result["analysis_bundle_receipt"]["file_name"] == "analysis-bundle-INC0010104.zip"
+
+
+def test_write_to_servicenow_auto_assigns_group_for_high_confidence_category(monkeypatch) -> None:
+    note = WorkNote(
+        incident_number="INC0010123",
+        work_note_markdown="Work note body.",
+        recommendation="Observed beneficiary verification failure.",
+        rationale_summary="Evidence-grounded summary.",
+        confidence=0.95,
+        evidence=[],
+    )
+    patch_bodies: list[dict[str, Any]] = []
+
+    def fake_get(*args: Any, **kwargs: Any) -> _FakeResponse:
+        return _FakeResponse(200, {"result": [{"sys_id": "sys-123", "number": "INC0010123"}]})
+
+    def fake_patch(*args: Any, **kwargs: Any) -> _FakeResponse:
+        patch_bodies.append(kwargs["json"])
+        return _FakeResponse(200, {"result": {"sys_id": "sys-123"}})
+
+    monkeypatch.setattr(writer.requests, "get", fake_get)
+    monkeypatch.setattr(writer.requests, "patch", fake_patch)
+    monkeypatch.setenv("SERVICENOW_INSTANCE_URL", "https://example.service-now.com")
+    monkeypatch.setenv("SERVICENOW_USERNAME", "bot")
+    monkeypatch.setenv("SERVICENOW_PASSWORD", "password")
+    monkeypatch.setenv(
+        "SERVICENOW_ASSIGNMENT_GROUP_MAP",
+        '{"api_error":"c38f00f4530360100999ddeeff7b1298"}',
+    )
+
+    receipt = writer._write_to_servicenow(
+        note,
+        llm_inference={
+            "structured_analysis": {
+                "analysis_category": "api_error",
+                "analysis_category_confidence": 0.93,
+            }
+        },
+    )
+
+    assert patch_bodies == [
+        {
+            "work_notes": "Work note body.",
+            "assignment_group": "c38f00f4530360100999ddeeff7b1298",
+        }
+    ]
+    assert receipt["assignment_update"]["applied"] is True
+
+
+def test_write_to_servicenow_does_not_assign_group_below_threshold(monkeypatch) -> None:
+    note = WorkNote(
+        incident_number="INC0010123",
+        work_note_markdown="Work note body.",
+        recommendation="Observed beneficiary verification failure.",
+        rationale_summary="Evidence-grounded summary.",
+        confidence=0.88,
+        evidence=[],
+    )
+    patch_bodies: list[dict[str, Any]] = []
+
+    def fake_get(*args: Any, **kwargs: Any) -> _FakeResponse:
+        return _FakeResponse(200, {"result": [{"sys_id": "sys-123", "number": "INC0010123"}]})
+
+    def fake_patch(*args: Any, **kwargs: Any) -> _FakeResponse:
+        patch_bodies.append(kwargs["json"])
+        return _FakeResponse(200, {"result": {"sys_id": "sys-123"}})
+
+    monkeypatch.setattr(writer.requests, "get", fake_get)
+    monkeypatch.setattr(writer.requests, "patch", fake_patch)
+    monkeypatch.setenv("SERVICENOW_INSTANCE_URL", "https://example.service-now.com")
+    monkeypatch.setenv("SERVICENOW_USERNAME", "bot")
+    monkeypatch.setenv("SERVICENOW_PASSWORD", "password")
+    monkeypatch.setenv(
+        "SERVICENOW_ASSIGNMENT_GROUP_MAP",
+        '{"api_error":"c38f00f4530360100999ddeeff7b1298"}',
+    )
+
+    receipt = writer._write_to_servicenow(
+        note,
+        llm_inference={
+            "structured_analysis": {
+                "analysis_category": "api_error",
+                "analysis_category_confidence": 0.89,
+            }
+        },
+    )
+
+    assert patch_bodies == [{"work_notes": "Work note body."}]
+    assert receipt["assignment_update"]["applied"] is False
+    assert receipt["assignment_update"]["reason"] == "confidence below threshold"
+
+
+def test_write_to_servicenow_creates_missing_assignment_group_when_enabled(monkeypatch) -> None:
+    note = WorkNote(
+        incident_number="INC0010123",
+        work_note_markdown="Work note body.",
+        recommendation="Observed beneficiary verification failure.",
+        rationale_summary="Evidence-grounded summary.",
+        confidence=0.95,
+        evidence=[],
+    )
+    patch_bodies: list[dict[str, Any]] = []
+    created_groups: list[dict[str, Any]] = []
+
+    def fake_get(url: str, *args: Any, **kwargs: Any) -> _FakeResponse:
+        if url.endswith("/api/now/table/incident"):
+            return _FakeResponse(200, {"result": [{"sys_id": "sys-123", "number": "INC0010123"}]})
+        if url.endswith("/api/now/table/sys_user_group"):
+            return _FakeResponse(200, {"result": []})
+        raise AssertionError(f"unexpected GET url: {url}")
+
+    def fake_post(url: str, *args: Any, **kwargs: Any) -> _FakeResponse:
+        assert url.endswith("/api/now/table/sys_user_group")
+        created_groups.append(kwargs["json"])
+        return _FakeResponse(
+            201,
+            {"result": {"sys_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "name": "API Support"}},
+        )
+
+    def fake_patch(*args: Any, **kwargs: Any) -> _FakeResponse:
+        patch_bodies.append(kwargs["json"])
+        return _FakeResponse(200, {"result": {"sys_id": "sys-123"}})
+
+    monkeypatch.setattr(writer.requests, "get", fake_get)
+    monkeypatch.setattr(writer.requests, "post", fake_post)
+    monkeypatch.setattr(writer.requests, "patch", fake_patch)
+    monkeypatch.setenv("SERVICENOW_INSTANCE_URL", "https://example.service-now.com")
+    monkeypatch.setenv("SERVICENOW_USERNAME", "bot")
+    monkeypatch.setenv("SERVICENOW_PASSWORD", "password")
+    monkeypatch.setenv("SERVICENOW_AUTO_CREATE_ASSIGNMENT_GROUPS", "true")
+    monkeypatch.setenv("SERVICENOW_ASSIGNMENT_GROUP_MAP", '{"api_error":"API Support"}')
+
+    receipt = writer._write_to_servicenow(
+        note,
+        llm_inference={
+            "structured_analysis": {
+                "analysis_category": "api_error",
+                "analysis_category_confidence": 0.93,
+            }
+        },
+    )
+
+    assert created_groups[0]["name"] == "API Support"
+    assert patch_bodies == [
+        {
+            "work_notes": "Work note body.",
+            "assignment_group": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        }
+    ]
+    assert receipt["assignment_update"]["group_resolution"]["resolved_by"] == "created"

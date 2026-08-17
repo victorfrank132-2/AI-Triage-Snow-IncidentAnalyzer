@@ -95,6 +95,15 @@ class ComputeStack(Stack):
         self.mock_mode = mock_mode
         self.mtls_enabled = mtls_enabled
         self.cost_optimized_dev = cost_optimized_dev
+        endpoint_override = self.node.try_get_context("opensearch_collection_endpoint_override")
+        self.opensearch_collection_endpoint = (
+            str(endpoint_override).strip()
+            if endpoint_override
+            else self.data.rag_collection.attr_collection_endpoint
+        )
+        self.opensearch_collection_arn = self._resolve_opensearch_collection_arn(
+            endpoint_override
+        )
         self.task_roles = {
             stage: iam.Role(
                 self,
@@ -148,6 +157,33 @@ class ComputeStack(Stack):
             type="String",
             default="bootstrap",
             description="Immutable ECR image tag produced by CodeBuild.",
+        )
+        self.servicenow_assignment_confidence_threshold = CfnParameter(
+            self,
+            "ServiceNowAssignmentConfidenceThreshold",
+            type="String",
+            default="0.90",
+            description="Minimum analysis category confidence required before auto assigning an incident group.",
+        )
+        self.servicenow_assignment_group_map = CfnParameter(
+            self,
+            "ServiceNowAssignmentGroupMap",
+            type="String",
+            default=(
+                '{"api_error":"API Support","performance":"Performance Engineering",'
+                '"access":"IAM Support","network":"Network Operations",'
+                '"security":"Security Operations","infrastructure":"Infrastructure Operations",'
+                '"data":"Data Operations"}'
+            ),
+            description="JSON map from analysis category to ServiceNow assignment group sys_id or accepted value.",
+        )
+        self.servicenow_auto_create_assignment_groups = CfnParameter(
+            self,
+            "ServiceNowAutoCreateAssignmentGroups",
+            type="String",
+            default="true",
+            allowed_values=["true", "false"],
+            description="Create missing ServiceNow assignment groups from the configured category map.",
         )
         self.cluster = ecs.Cluster(
             self,
@@ -254,8 +290,20 @@ class ComputeStack(Stack):
                 "MOCK_MODE": str(self.mock_mode).lower(),
                 "BEDROCK_MODEL_ID": self.bedrock_model_id.value_as_string,
                 "BEDROCK_EMBEDDING_MODEL_ID": self.bedrock_embedding_model_id.value_as_string,
-                "OPENSEARCH_COLLECTION_ENDPOINT": self.data.rag_collection.attr_collection_endpoint,
+                "OPENSEARCH_COLLECTION_ENDPOINT": self.opensearch_collection_endpoint,
                 "OPENSEARCH_INDEX_NAME": "incidents-v1",
+                "OPENSEARCH_RETRIEVAL_K": "3",
+                "OPENSEARCH_RETRIEVAL_ENABLED": "true",
+                "OPENSEARCH_INDEXING_ENABLED": "true",
+                "SERVICENOW_ASSIGNMENT_CONFIDENCE_THRESHOLD": (
+                    self.servicenow_assignment_confidence_threshold.value_as_string
+                ),
+                "SERVICENOW_ASSIGNMENT_GROUP_MAP": (
+                    self.servicenow_assignment_group_map.value_as_string
+                ),
+                "SERVICENOW_AUTO_CREATE_ASSIGNMENT_GROUPS": (
+                    self.servicenow_auto_create_assignment_groups.value_as_string
+                ),
             },
             logging=ecs.LogDrivers.aws_logs(stream_prefix=service, log_group=log_group),
             health_check=ecs.HealthCheck(
@@ -319,7 +367,7 @@ class ComputeStack(Stack):
         if service in {"rag-retriever", "rag-indexer", "rag-quality-job"}:
             task_role.add_to_policy(
                 iam.PolicyStatement(
-                    actions=["aoss:APIAccessAll"], resources=[self.data.rag_collection.attr_arn]
+                    actions=["aoss:APIAccessAll"], resources=[self.opensearch_collection_arn]
                 )
             )
         if service == "rag-retriever":
@@ -359,6 +407,17 @@ class ComputeStack(Stack):
         self.task_definitions[service] = task_definition
         self.containers[service] = container
         self.modules[service] = module
+
+    def _resolve_opensearch_collection_arn(self, endpoint_override: object | None) -> str:
+        if endpoint_override:
+            endpoint = str(endpoint_override).strip()
+            collection_id = endpoint.removeprefix("https://").split(".", 1)[0].strip("/")
+            if collection_id:
+                return (
+                    f"arn:{self.partition}:aoss:{self.region}:{self.account}:collection/"
+                    f"{collection_id}"
+                )
+        return self.data.rag_collection.attr_arn
 
     def _workflow_task(
         self,

@@ -4,10 +4,9 @@ import datetime
 import json
 import os
 import pathlib
-import tempfile
 import subprocess
+import tempfile
 import zipfile
-
 
 CODEBUILD_PROJECT_NAME = "ContainerBuildAndDeploy4262-AopAOBDGavEO"
 SOURCE_BUCKET = "snowdata-incidentartifactbucket4b5e6e39-t23eru91y2fm"

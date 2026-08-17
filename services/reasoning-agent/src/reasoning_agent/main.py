@@ -45,6 +45,20 @@ def _unique(items: list[str]) -> list[str]:
     return deduped
 
 
+def _clean_extracted_error_message(value: str) -> str:
+    message = str(value or "").strip(" .")
+    if not message:
+        return ""
+    label_match = re.search(
+        r"\s+(?:Request ID|Policy ID|Quote ID|Endpoint|Error Code|Status Code|Response Time)\s*:",
+        message,
+        flags=re.IGNORECASE,
+    )
+    if label_match:
+        message = message[: label_match.start()].strip(" .")
+    return message
+
+
 def _extract_observed_signals(evidence: list[dict[str, Any]]) -> dict[str, list[str]]:
     joined_text = "\n".join(str(item.get("summary", "")) for item in evidence)
     request_ids = _unique(re.findall(r"\bREQ-[A-Za-z0-9-]+\b", joined_text))
@@ -57,14 +71,19 @@ def _extract_observed_signals(evidence: list[dict[str, Any]]) -> dict[str, list[
         re.findall(r"\b(?:GET|POST|PUT|DELETE|PATCH)\s+/api/[A-Za-z0-9/_-]+\b", joined_text)
     )
     api_paths = _unique(re.findall(r"\b/api/[A-Za-z0-9/_-]+\b", joined_text))
-    error_messages = _unique(
-        re.findall(
-            r"(?:Error Message|Message)\s*[:\-]\s*([^\n\r*]+)",
-            joined_text,
-            flags=re.IGNORECASE,
-        )
-    )
-    error_messages = [message.strip(" .") for message in error_messages if message.strip(" .")]
+    message_patterns = [
+        r"(?:api\s+)?error(?:\s+message)?\s+(?:was|is)\s*[:\-]?\s*\"([^\"\n\r]+)\"",
+        r"(?:Error Message|Message)\s*[:\-]\s*([^\n\r*]+)",
+        r"\"message\"\s*:\s*\"([^\"\n\r]+)\"",
+    ]
+    extracted_messages: list[str] = []
+    for pattern in message_patterns:
+        extracted_messages.extend(re.findall(pattern, joined_text, flags=re.IGNORECASE))
+    error_messages = [
+        cleaned
+        for message in _unique(extracted_messages)
+        if (cleaned := _clean_extracted_error_message(message))
+    ]
     return {
         "request_ids": request_ids,
         "policy_ids": policy_ids,
@@ -89,10 +108,15 @@ def _extract_attachment_log_facts(summary: str) -> dict[str, list[str]]:
     message_pattern = (
         r"(?:\*\*\s*)?(?:Error Message|Message)(?:\s*\*\*)?\s*[:\-]\s*([^\n\r*]+)"
         r"|(?:\*\*\s*)?(?:Error Message|Message)\s*[:\-]\s*(?:\*\*\s*)?([^\n\r*]+)"
+        r"|(?:api\s+)?error(?:\s+message)?\s+(?:was|is)\s*[:\-]?\s*\"([^\"\n\r]+)\""
+        r"|\"message\"\s*:\s*\"([^\"\n\r]+)\""
     )
 
     error_codes = [match[0] or match[1] for match in re.findall(code_pattern, text, re.IGNORECASE)]
-    error_messages = [match[0] or match[1] for match in re.findall(message_pattern, text, re.IGNORECASE)]
+    error_messages = [
+        match[0] or match[1] or match[2] or match[3]
+        for match in re.findall(message_pattern, text, re.IGNORECASE)
+    ]
 
     facts: dict[str, list[str]] = {
         "error_codes": _unique(error_codes),
@@ -105,8 +129,29 @@ def _extract_attachment_log_facts(summary: str) -> dict[str, list[str]]:
     }
     # strip trailing spaces/asterisks from extracted values
     for key in facts:
-        facts[key] = [v.strip(" .*") for v in facts[key] if v.strip(" .*")]
+        if key == "error_messages":
+            facts[key] = [
+                cleaned
+                for v in facts[key]
+                if (cleaned := _clean_extracted_error_message(v.strip(" .*")))
+            ]
+        else:
+            facts[key] = [v.strip(" .*") for v in facts[key] if v.strip(" .*")]
     return facts
+
+
+def _infer_analysis_category(signals: dict[str, list[str]], endpoints: list[str]) -> tuple[str, float]:
+    endpoint_text = " ".join(endpoints).lower()
+    error_text = " ".join(signals["error_messages"] + signals["error_codes"]).lower()
+    if "unauthorized" in error_text or "forbidden" in error_text or "access" in error_text:
+        return "access", 0.92
+    if "timeout" in error_text or signals["response_times"]:
+        return "performance", 0.91
+    if any(term in endpoint_text for term in ("beneficiary", "underwriting", "quote", "policy")):
+        return "api_error", 0.93
+    if signals["error_messages"] or signals["error_codes"] or signals["status_codes"]:
+        return "api_error", 0.91
+    return "unknown", 0.0
 
 
 def _extract_splunk_row_signal(evidence: list[dict[str, Any]]) -> str:
@@ -161,9 +206,17 @@ def _build_grounded_analysis(
     signals = _extract_observed_signals(evidence)
     splunk_rows = _extract_splunk_row_signal(evidence)
     endpoints = signals["method_endpoints"] or signals["api_paths"]
+    analysis_category, analysis_category_confidence = _infer_analysis_category(signals, endpoints)
 
-    # ── Summary: analytic sentence, not a numeric dump ──────────────────────
-    if endpoints and (signals["error_codes"] or signals["status_codes"]):
+    # Summary: analytic sentence, not a numeric dump
+    primary_error_message = signals["error_messages"][0] if signals["error_messages"] else ""
+    if endpoints and primary_error_message:
+        endpoint_str = ", ".join(endpoints[:3])
+        summary = (
+            f"Observed API failure \"{primary_error_message}\" on {endpoint_str}. "
+            f"Splunk log search returned {splunk_rows} matched rows across app/api indexes."
+        )
+    elif endpoints and (signals["error_codes"] or signals["status_codes"]):
         endpoint_str = ", ".join(endpoints[:3])
         error_str = ", ".join((signals["error_codes"] or signals["status_codes"])[:3])
         summary = (
@@ -181,7 +234,7 @@ def _build_grounded_analysis(
             "Splunk log search returned {splunk_rows} matched rows; further log capture may be required."
         )
 
-    # ── Triage points ────────────────────────────────────────────────────────
+    # Triage points
     triage_points: list[str] = []
     if signals["request_ids"]:
         triage_points.append(f"Request IDs observed: {', '.join(signals['request_ids'][:6])}.")
@@ -191,14 +244,20 @@ def _build_grounded_analysis(
         triage_points.append(f"Quote IDs observed: {', '.join(signals['quote_ids'][:6])}.")
     if signals["error_codes"]:
         triage_points.append(f"Error codes observed: {', '.join(signals['error_codes'][:6])}.")
+    if signals["error_messages"]:
+        triage_points.append(f"Primary error message observed: {signals['error_messages'][0]}.")
     if endpoints:
         triage_points.append(f"Endpoints observed: {', '.join(endpoints[:6])}.")
+    if analysis_category != "unknown":
+        triage_points.append(
+            f"Analysis category: {analysis_category} (confidence {analysis_category_confidence:.2f})."
+        )
     triage_points.append(
         f"Splunk query executed against app/api indexes: {splunk_query or 'not available'}."
     )
     triage_points.append(f"RAG route selected: {route.route.value} (confidence {route.confidence:.2f}).")
 
-    # ── Build lookup maps ────────────────────────────────────────────────────
+    # Build lookup maps
     case_results = attachment_case_results or []
     attachment_name_by_ref = {
         str(item.get("sys_id", "")): str(item.get("file_name", ""))
@@ -212,7 +271,7 @@ def _build_grounded_analysis(
             if ref:
                 attachment_summary_by_ref[ref] = str(att_ev.get("summary", ""))
 
-    # ── Case-by-case attachment log analysis ─────────────────────────────────
+    # Case-by-case attachment log analysis
     rca_sections: list[str] = ["Case-by-case log analysis:"]
     any_case = False
     for case in case_results:
@@ -254,41 +313,39 @@ def _build_grounded_analysis(
     if not any_case:
         rca_sections.append("- No attachment with recognisable identifiers was matched to Splunk results.")
 
-    # ── Recommended remediation ──────────────────────────────────────────────
+    # Recommended remediation
     quote_related = bool(signals["quote_ids"]) or any("/quotes" in ep for ep in endpoints)
     policy_related = bool(signals["policy_ids"]) or any("/underwriting" in ep for ep in endpoints)
     service_related = bool(endpoints)
 
-    rca_sections.append("")
-    rca_sections.append("Recommended remediation:")
+    remediation_points: list[str] = []
     if signals["error_messages"] or any(
         _extract_attachment_log_facts(s)["error_messages"]
         for s in attachment_summary_by_ref.values()
     ):
-        rca_sections.append(
+        remediation_points.append(
             "- Trace exact error messages above in service logs for the listed request IDs before restart/redeploy actions."
         )
     if quote_related:
-        rca_sections.append(
+        remediation_points.append(
             "- Validate quote/premium calculation dependencies (pricing/rules service) and recent deployment/config changes."
         )
     if policy_related:
-        rca_sections.append(
+        remediation_points.append(
             "- Validate underwriting/policy decision dependencies and upstream timeout thresholds for affected endpoints."
         )
     if service_related:
-        rca_sections.append(
+        remediation_points.append(
             "- Check gateway and service timeout/error-rate metrics for affected API endpoints during failure timestamps."
         )
-    rca_sections.append("- Confirm fix with a targeted replay using the same request identifiers listed above.")
-    rca_sections.append("")
-    rca_sections.append(
-        "Conclusion: RCA is derived from observed attachment logs and should be confirmed by service owners before remediation."
-    )
+    if remediation_points:
+        rca_sections.append("")
+        rca_sections.append("Recommended remediation:")
+        rca_sections.extend(remediation_points)
 
     possible_rca = "\n".join(rca_sections)
 
-    # ── RCA hints for LLM inference only (not rendered in work note) ─────────
+    # RCA hints for LLM inference only (not rendered in work note)
     llm_rca_hints = {
         "service_rca": (
             "API service endpoints show repeated failure patterns; check upstream dependency and gateway timeout."
@@ -317,6 +374,8 @@ def _build_grounded_analysis(
         "possible_rca": possible_rca,
         "rationale_summary": rationale_summary,
         "llm_rca_hints": llm_rca_hints,
+        "analysis_category": analysis_category,
+        "analysis_category_confidence": analysis_category_confidence,
     }
 
 
@@ -417,7 +476,10 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
             system_prompt=(
                 "You are an incident analyst. Use only supplied logs/evidence/prior-context. "
                 "Return strict JSON with keys: recommendation (string), triage_points (array of strings), "
-                "possible_rca (string), rationale_summary (string), disclaimer (string). "
+                "possible_rca (string), rationale_summary (string), analysis_category (string), "
+                "analysis_category_confidence (number from 0.0 to 1.0), disclaimer (string). "
+                "Use one analysis_category from: api_error, infrastructure, security, data, network, "
+                "access, performance, unknown. "
                 "Cite concrete identifiers/endpoints/error codes from input where available. "
                 "Mark unknown when evidence is missing. Do not include chain-of-thought. Do not invent fields."
             ),
@@ -425,13 +487,10 @@ def process(context: TaskContext, payload: dict[str, Any]) -> dict[str, Any]:
             max_tokens=1400,
         )
         structured_analysis = _extract_structured_analysis(llm_response)
-        llm_triage_raw = structured_analysis.get("triage_points", [])
-        if isinstance(llm_triage_raw, str):
-            llm_triage_iterable = [llm_triage_raw]
-        elif isinstance(llm_triage_raw, list):
-            llm_triage_iterable = llm_triage_raw
-        else:
-            llm_triage_iterable = []
+        structured_analysis.setdefault("analysis_category", grounded["analysis_category"])
+        structured_analysis.setdefault(
+            "analysis_category_confidence", grounded["analysis_category_confidence"]
+        )
         recommendation = grounded["recommendation"]
         rationale = grounded["rationale_summary"]
         triage_points = grounded["triage_points"]

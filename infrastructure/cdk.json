@@ -6,6 +6,7 @@
     "environment": "dev",
     "mock_mode": false,
     "mtls_enabled": false,
-    "cost_optimized_dev": true
+    "cost_optimized_dev": true,
+    "opensearch_collection_endpoint_override": "https://dwsihkf5yjzsql35kzy6.aoss.us-east-1.on.aws"
   }
 }

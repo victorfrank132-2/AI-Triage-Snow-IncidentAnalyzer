@@ -111,19 +111,19 @@ class DataStack(Stack):
         encryption_policy = aoss.CfnSecurityPolicy(
             self,
             "RagEncryptionPolicy",
-            name="snow-rag-encryption",
+            name="snow-rag-nextgen-encryption",
             type="encryption",
             policy=json.dumps(
                 {
-                    "Rules": [{"ResourceType": "collection", "Resource": ["collection/snow-rag"]}],
+                    "Rules": [{"ResourceType": "collection", "Resource": ["collection/snow-rag-nextgen"]}],
                     "AWSOwnedKey": False,
                     "KmsARN": self.data_key.key_arn,
                 }
             ),
         )
         network_policy_rules: list[dict[str, object]] = [
-            {"ResourceType": "collection", "Resource": ["collection/snow-rag"]},
-            {"ResourceType": "dashboard", "Resource": ["collection/snow-rag"]},
+            {"ResourceType": "collection", "Resource": ["collection/snow-rag-nextgen"]},
+            {"ResourceType": "dashboard", "Resource": ["collection/snow-rag-nextgen"]},
         ]
         network_policy_entry: dict[str, object] = {"Rules": network_policy_rules}
         if cost_optimized_dev:
@@ -134,12 +134,16 @@ class DataStack(Stack):
         network_policy = aoss.CfnSecurityPolicy(
             self,
             "RagNetworkPolicy",
-            name="snow-rag-network",
+            name="snow-rag-nextgen-network",
             type="network",
             policy=json.dumps([network_policy_entry]),
         )
         self.rag_collection = aoss.CfnCollection(
-            self, "RagVectorCollection", name="snow-rag", type="VECTORSEARCH"
+            self,
+            "RagVectorCollection",
+            name="snow-rag-nextgen",
+            type="VECTORSEARCH",
+            standby_replicas="DISABLED" if cost_optimized_dev else "ENABLED",
         )
         self.rag_collection.add_dependency(encryption_policy)
         self.rag_collection.add_dependency(network_policy)
@@ -157,7 +161,7 @@ class DataStack(Stack):
         access_policy = aoss.CfnAccessPolicy(
             self,
             "RagDataAccessPolicy",
-            name="snow-rag-data-access",
+            name="snow-rag-nextgen-data-access",
             type="data",
             policy=json.dumps(
                 [
@@ -167,12 +171,12 @@ class DataStack(Stack):
                         "Rules": [
                             {
                                 "ResourceType": "collection",
-                                "Resource": ["collection/snow-rag"],
+                                "Resource": ["collection/snow-rag-nextgen"],
                                 "Permission": ["aoss:DescribeCollectionItems"],
                             },
                             {
                                 "ResourceType": "index",
-                                "Resource": ["index/snow-rag/incidents-v1"],
+                                "Resource": ["index/snow-rag-nextgen/incidents-v1"],
                                 "Permission": [
                                     "aoss:CreateIndex",
                                     "aoss:DescribeIndex",
@@ -193,7 +197,7 @@ class DataStack(Stack):
                 "CollectionEndpoint": self.rag_collection.attr_collection_endpoint,
                 "IndexName": "incidents-v1",
                 "Settings": {
-                    "Index": {"Knn": True, "KnnAlgoParamEfSearch": 100, "RefreshInterval": "10s"}
+                    "Index": {"Knn": True, "KnnAlgoParamEfSearch": 40, "RefreshInterval": "60s"}
                 },
                 "Mappings": {
                     "Properties": {

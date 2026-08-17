@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "services" / "splunk-agent" / "src"))
 
-from splunk_agent import main as splunk_main
+from splunk_agent import main as splunk_main  # noqa: E402
 
 
 def test_build_query_uses_expected_index_pattern_and_identifiers(monkeypatch) -> None:

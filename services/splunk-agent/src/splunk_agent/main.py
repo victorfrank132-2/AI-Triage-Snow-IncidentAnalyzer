@@ -4,15 +4,14 @@ import json
 import os
 import re
 import time
-from urllib.parse import urlparse
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 from snow_intelligence.runtime import TaskContext, run_task
 from snow_intelligence.schemas import EvidenceReference, SplunkQueryPolicy, SplunkQueryRequest
 from snow_intelligence.splunk import validate_splunk_query
 from snow_intelligence.stages import load_stage
-
 
 _DEFAULT_SPLUNK_INDEXES = "life_api_logs,life_ui_logs,pc_api_logs,pc_ui_logs"
 
